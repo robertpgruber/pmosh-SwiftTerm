@@ -1457,10 +1457,30 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let displayBuffer = terminal.displayBuffer
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
                               height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
-        //contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
-        contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
+        // pmosh #559 patch: only snap the viewport to the bottom when the user is NOT
+        // scrolled up into history. Without this guard every new output line yanks the
+        // view to the bottom, killing flick-scrollback (the whole point of pmosh).
+        if !userScrolling {
+            contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
+        }
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize
+    }
+
+    // pmosh #559 patch: drive `userScrolling` from real UIScrollView gestures so
+    // updateScroller() knows when to leave the viewport alone.
+    public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        let db = terminal.displayBuffer
+        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
+        if contentOffset.y < bottom - 1 { userScrolling = true }
+    }
+    public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        let db = terminal.displayBuffer
+        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
+        if contentOffset.y >= bottom - 1 { userScrolling = false }
+    }
+    public func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+        userScrolling = true
     }
 
 #if canImport(MetalKit)
