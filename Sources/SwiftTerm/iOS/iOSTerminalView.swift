@@ -320,6 +320,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     {
         showsHorizontalScrollIndicator = true
         indicatorStyle = .white
+        // pmosh: use UIScrollView's normal (fast) deceleration physics so momentum
+        // flicks coast further and feel buttery. The default .fast rate kills momentum
+        // too quickly; .normal matches the system physics model used by e.g. Messages.
+        decelerationRate = .normal
 
         setupKeyboardButtonColors()
         setupDisplayUpdates ();
