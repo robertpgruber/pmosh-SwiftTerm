@@ -1311,6 +1311,166 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    // MARK: - Selection handles (draggable knobs at selection start/end)
+
+    /// Diameter of each circular selection-handle knob (points).
+    private let selectionHandleDiameter: CGFloat = 14
+
+    /// The knob at the selection START position (top-left of the highlighted region).
+    private var selectionStartHandleView: UIView?
+    /// The knob at the selection END position (bottom-right of the highlighted region).
+    private var selectionEndHandleView: UIView?
+
+    /// Which handle the user is currently dragging (nil when neither is active).
+    private enum DraggedHandle { case start, end }
+    private var draggedHandle: DraggedHandle?
+
+    /// Creates the two handle knobs on first use and adds them to the view hierarchy.
+    private func ensureHandleViews() {
+        guard selectionStartHandleView == nil else { return }
+
+        func makeKnob() -> UIView {
+            let d = selectionHandleDiameter
+            let v = UIView(frame: CGRect(x: 0, y: 0, width: d, height: d))
+            v.backgroundColor = _selectionHandleColor
+            v.layer.cornerRadius = d / 2
+            v.layer.shadowColor = UIColor.black.cgColor
+            v.layer.shadowOpacity = 0.25
+            v.layer.shadowOffset = CGSize(width: 0, height: 1)
+            v.layer.shadowRadius = 2
+            v.isHidden = true
+            addSubview(v)
+            return v
+        }
+
+        let startKnob = makeKnob()
+        let startPan = UIPanGestureRecognizer(target: self, action: #selector(panStartHandle(_:)))
+        startPan.minimumNumberOfTouches = 1
+        startPan.maximumNumberOfTouches = 1
+        startKnob.addGestureRecognizer(startPan)
+        selectionStartHandleView = startKnob
+
+        let endKnob = makeKnob()
+        let endPan = UIPanGestureRecognizer(target: self, action: #selector(panEndHandle(_:)))
+        endPan.minimumNumberOfTouches = 1
+        endPan.maximumNumberOfTouches = 1
+        endKnob.addGestureRecognizer(endPan)
+        selectionEndHandleView = endKnob
+    }
+
+    /// Converts a buffer-relative Position to a CGPoint in the scroll-view's content space.
+    /// Buffer row N lives at Y = N * cellDimension.height (yDisp is already encoded in the row).
+    private func contentPoint(for pos: Position) -> CGPoint {
+        return CGPoint(
+            x: CGFloat(pos.col) * cellDimension.width,
+            y: CGFloat(pos.row) * cellDimension.height
+        )
+    }
+
+    /// Repositions and shows/hides the two handle knobs to match the current selection.
+    /// Safe to call at any time; no-ops when there is no active selection.
+    func updateSelectionHandles() {
+        ensureHandleViews()
+        guard let startKnob = selectionStartHandleView,
+              let endKnob = selectionEndHandleView else { return }
+
+        guard let sel = selection, sel.active, sel.hasSelectionRange else {
+            startKnob.isHidden = true
+            endKnob.isHidden = true
+            return
+        }
+
+        let d = selectionHandleDiameter
+        let startPt = contentPoint(for: sel.start)
+        let endPt   = contentPoint(for: sel.end)
+
+        // Start handle: centred on the top-left corner of the first selected cell,
+        // nudged left so the knob "hangs off" the left edge.
+        startKnob.frame = CGRect(
+            x: startPt.x - d / 2,
+            y: startPt.y - d / 2,
+            width: d, height: d
+        )
+
+        // End handle: centred on the bottom-right corner of the last selected cell.
+        endKnob.frame = CGRect(
+            x: endPt.x + cellDimension.width - d / 2,
+            y: endPt.y + cellDimension.height - d / 2,
+            width: d, height: d
+        )
+
+        startKnob.isHidden = false
+        endKnob.isHidden   = false
+
+        // Keep handles in front of content (they may have been behind after a Metal redraw).
+        bringSubviewToFront(startKnob)
+        bringSubviewToFront(endKnob)
+    }
+
+    /// Converts a touch location in the knob's parent (self) coordinate space to a
+    /// buffer-relative Position.
+    private func bufferPosition(from contentPoint: CGPoint) -> Position {
+        let col = max(0, min(Int(contentPoint.x / cellDimension.width), terminal.cols - 1))
+        let row = max(0, Int(contentPoint.y / cellDimension.height))
+        return Position(col: col, row: row)
+    }
+
+    /// Pan handler for the START handle knob.
+    @objc private func panStartHandle(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            draggedHandle = .start
+            // Dragging the start handle: pivot is the END so start moves freely.
+            selection.pivot = selection.end
+            stopSelectionTimer()
+        case .changed:
+            let loc = gesture.location(in: self)
+            let hit = bufferPosition(from: loc)
+            selection.pivotExtend(bufferPosition: hit)
+            updateSelectionHandles()
+            requestDisplay()
+        case .ended:
+            draggedHandle = nil
+            stopSelectionTimer()
+            showContextMenu(forRegion: makeContextMenuRegionForSelection(),
+                            pos: bufferPosition(from: gesture.location(in: self)))
+        case .cancelled, .failed:
+            draggedHandle = nil
+            stopSelectionTimer()
+        default:
+            break
+        }
+    }
+
+    /// Pan handler for the END handle knob.
+    @objc private func panEndHandle(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            draggedHandle = .end
+            // Dragging the end handle: pivot is the START so end moves freely.
+            selection.pivot = selection.start
+            stopSelectionTimer()
+        case .changed:
+            let loc = gesture.location(in: self)
+            let hit = bufferPosition(from: loc)
+            selection.pivotExtend(bufferPosition: hit)
+            updateSelectionHandles()
+            requestDisplay()
+        case .ended:
+            draggedHandle = nil
+            stopSelectionTimer()
+            showContextMenu(forRegion: makeContextMenuRegionForSelection(),
+                            pos: bufferPosition(from: gesture.location(in: self)))
+        case .cancelled, .failed:
+            draggedHandle = nil
+            stopSelectionTimer()
+        default:
+            break
+        }
+    }
+
+    // MARK: - End selection handles
+
     /// Whether the terminal currently has an active text selection.
     ///
     /// Exposed publicly so embedders (e.g. a UIScrollView subclass that
