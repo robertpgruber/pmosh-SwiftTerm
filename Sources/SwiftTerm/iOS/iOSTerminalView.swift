@@ -320,7 +320,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     {
         showsHorizontalScrollIndicator = true
         indicatorStyle = .white
-        
+
         setupKeyboardButtonColors()
         setupDisplayUpdates ();
         setupOptions ()
@@ -328,6 +328,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         setupGestures ()
         setupLinkReportingInteractions()
         setupAccessoryView ()
+        // Pre-create handle views so their pan gestures exist before
+        // enableSelectionPanGesture() installs its require(toFail:) dependency.
+        ensureHandleViews()
         didFinishSetup = true
     }
 
