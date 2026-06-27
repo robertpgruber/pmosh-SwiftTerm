@@ -420,7 +420,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     func setupDisplayUpdates ()
     {
         link = CADisplayLink(target: self, selector: #selector(step))
-            
+
+        // pmosh: request 120Hz ProMotion on iPhone 15 Pro. On devices that don't
+        // support ProMotion, iOS honours the closest available rate (60Hz fallback).
+        // Without this the CADisplayLink defaults to 60Hz even on ProMotion displays.
+        if #available(iOS 15.0, *) {
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        }
+
         link.add(to: .current, forMode: .default)
         suspendDisplayUpdates()
     }
