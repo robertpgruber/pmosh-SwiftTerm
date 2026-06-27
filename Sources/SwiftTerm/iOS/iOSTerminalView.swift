@@ -1024,6 +1024,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return
         }
         let gesture = UIPanGestureRecognizer (target: self, action: #selector(panSelectionHandler))
+        // If the user touches a handle knob, let the knob's own pan take priority;
+        // the selection-body pan only activates when the knob pans have failed.
+        if let startPan = selectionStartHandleView?.gestureRecognizers?.first as? UIPanGestureRecognizer {
+            gesture.require(toFail: startPan)
+        }
+        if let endPan = selectionEndHandleView?.gestureRecognizers?.first as? UIPanGestureRecognizer {
+            gesture.require(toFail: endPan)
+        }
         addGestureRecognizer(gesture)
         self.panSelectionGesture = gesture
     }
