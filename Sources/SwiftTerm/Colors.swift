@@ -46,7 +46,7 @@ public class Color: Hashable {
         hasher.combine(blue)
     }
     
-    static let paleColors: [Color] = [
+    public static let paleColors: [Color] = [
         // dark colors
         Color (red8: 0x2e, green8: 0x34, blue8: 0x36),
         Color (red8: 0xcc, green8: 0x00, blue8: 0x00),
