@@ -2870,10 +2870,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         pendingSelectionChanged = true
         DispatchQueue.main.async {
             self.pendingSelectionChanged = false
-            
+
             self.inputDelegate?.selectionWillChange (self)
             self.inputDelegate?.selectionDidChange(self)
- 
+
 #if canImport(MetalKit)
             if self.metalView != nil {
                 self.metalDirtyRange = self.metalVisibleRange()
@@ -2884,12 +2884,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 #else
             self.setNeedsDisplay(self.bounds)
 #endif
-            
+
             if !self.selection.active {
                 UIMenuController.shared.hideMenu()
                 self.selection.selectNone()
                 self.disableSelectionPanGesture()
             }
+
+            // Reposition (or hide) the drag handles to match the current selection.
+            self.updateSelectionHandles()
         }
     }
 
