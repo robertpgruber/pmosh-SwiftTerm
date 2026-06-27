@@ -1686,7 +1686,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 #endif
     
-    var userScrolling = false
+    /// True while the user is actively dragging or decelerating in scroll history.
+    /// Set by the #559 patch (scrollViewWillBeginDragging / scrollViewDidEndDecelerating).
+    /// Made public so the app layer (TmuxSession) can suppress expensive work during scroll.
+    public var userScrolling = false
 
     func getCurrentGraphicsContext () -> CGContext?
     {
