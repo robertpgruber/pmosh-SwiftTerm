@@ -1306,6 +1306,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
         set {
             _selectionHandleColor = newValue
+            selectionStartHandleView?.backgroundColor = newValue
+            selectionEndHandleView?.backgroundColor = newValue
         }
     }
 

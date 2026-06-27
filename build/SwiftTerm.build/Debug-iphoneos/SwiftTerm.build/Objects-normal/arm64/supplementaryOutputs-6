@@ -1,0 +1,30 @@
+{
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/Utilities.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Utilities.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Utilities.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Utilities.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Utilities.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Utilities.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/iOS/SwiftUITerminalView.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/SwiftUITerminalView.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/SwiftUITerminalView.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/SwiftUITerminalView.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/SwiftUITerminalView.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/SwiftUITerminalView.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/iOS/iOSAccessoryView.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSAccessoryView.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSAccessoryView.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSAccessoryView.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSAccessoryView.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSAccessoryView.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/iOS/iOSCaretView.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSCaretView.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSCaretView.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSCaretView.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSCaretView.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSCaretView.swiftdeps"
+  }
+}

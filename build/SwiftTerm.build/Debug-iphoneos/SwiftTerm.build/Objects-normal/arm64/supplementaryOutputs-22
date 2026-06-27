@@ -1,0 +1,23 @@
+{
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/iOS/iOSTerminalView.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTerminalView.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTerminalView.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTerminalView.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTerminalView.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTerminalView.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/iOS/iOSTextInput.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextInput.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextInput.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextInput.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextInput.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextInput.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/iOS/iOSTextStorage.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextStorage.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextStorage.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextStorage.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextStorage.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/iOSTextStorage.swiftdeps"
+  }
+}

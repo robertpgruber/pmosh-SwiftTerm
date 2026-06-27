@@ -1,0 +1,30 @@
+{
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/Apple/CaretView.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CaretView.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CaretView.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CaretView.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CaretView.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CaretView.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/Apple/Extensions.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Extensions.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Extensions.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Extensions.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Extensions.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/Extensions.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/Apple/Metal/CoreTextGlyphRasterizer.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CoreTextGlyphRasterizer.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CoreTextGlyphRasterizer.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CoreTextGlyphRasterizer.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CoreTextGlyphRasterizer.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/CoreTextGlyphRasterizer.swiftdeps"
+  },
+  "/Users/cessna/pmosh/vendor/SwiftTerm/Sources/SwiftTerm/Apple/Metal/GlyphAtlas.swift" : {
+    "const-values" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/GlyphAtlas.swiftconstvalues",
+    "dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/GlyphAtlas.d",
+    "diagnostics" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/GlyphAtlas.dia",
+    "object" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/GlyphAtlas.o",
+    "swift-dependencies" : "/Users/cessna/pmosh/vendor/SwiftTerm/build/SwiftTerm.build/Debug-iphoneos/SwiftTerm.build/Objects-normal/arm64/GlyphAtlas.swiftdeps"
+  }
+}
