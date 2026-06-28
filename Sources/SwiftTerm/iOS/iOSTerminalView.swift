@@ -1641,11 +1641,25 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let displayBuffer = terminal.displayBuffer
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
                               height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
+        let bottomY = CGFloat (displayBuffer.lines.count - displayBuffer.rows) * cellDimension.height
         // pmosh #559 patch: only snap the viewport to the bottom when the user is NOT
         // scrolled up into history. Without this guard every new output line yanks the
         // view to the bottom, killing flick-scrollback (the whole point of pmosh).
-        if !userScrolling {
-            contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
+        //
+        // 🔴 KEEPS-SCROLLING-DOWN FIX (Robert 6/28): the `userScrolling` flag was driven
+        // ONLY by scroll-delegate edge events (willBeginDragging / didEndDecelerating).
+        // That leaves two holes where the flag is stale-`false` while the finger is in
+        // history, and any tmux output (statusline clock, cursor blink, our own
+        // refresh-client repaints) calls updateScroller → snaps to bottom:
+        //   1. The instant BEFORE willBeginDragging latches, at the very start of a drag.
+        //   2. A drag released WITHOUT a flick — didEndDecelerating never fires, so the
+        //      flag is never re-evaluated (there was no didEndDragging handler).
+        // Fix: don't trust the edge-event flag alone — also treat "actively touching the
+        // scroll view" and "parked above the bottom" as user-scrolled, computed LIVE here.
+        let parkedInHistory = contentOffset.y < bottomY - 1
+        let activelyTouching = isDragging || isDecelerating
+        if !userScrolling && !activelyTouching && !parkedInHistory {
+            contentOffset = CGPoint (x: 0, y: bottomY)
         }
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize
