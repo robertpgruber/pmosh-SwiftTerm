@@ -1677,6 +1677,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
         if contentOffset.y >= bottom - 1 { userScrolling = false }
     }
+    // pmosh keeps-scrolling-down fix (6/28): a drag released WITHOUT a flick never
+    // decelerates, so scrollViewDidEndDecelerating never fires. Resolve the flag here too:
+    // if the gentle drag-release left us at the bottom, follow live output again.
+    public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        guard !decelerate else { return }   // deceleration path handles itself above
+        let db = terminal.displayBuffer
+        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
+        userScrolling = contentOffset.y < bottom - 1
+    }
     public func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
         userScrolling = true
     }
