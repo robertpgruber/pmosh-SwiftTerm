@@ -1681,11 +1681,20 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // pmosh #559 patch: drive `userScrolling` from real UIScrollView gestures so
     // updateScroller() knows when to leave the viewport alone.
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        lastUserScrollTouch = Date()
         let db = terminal.displayBuffer
         let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
         if contentOffset.y < bottom - 1 { userScrolling = true }
     }
+    // Stamp the quiet-window clock on every scroll movement (drag + momentum), but ONLY
+    // when the user is actually driving it — `isDragging || isDecelerating` excludes the
+    // programmatic re-anchor in updateScroller (which also mutates contentOffset and would
+    // otherwise keep refreshing its own quiet window forever, freezing live tailing).
+    public func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if isDragging || isDecelerating { lastUserScrollTouch = Date() }
+    }
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        lastUserScrollTouch = Date()
         let db = terminal.displayBuffer
         let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
         if contentOffset.y >= bottom - 1 { userScrolling = false }
