@@ -1658,12 +1658,25 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // scroll view" and "parked above the bottom" as user-scrolled, computed LIVE here.
         let parkedInHistory = contentOffset.y < bottomY - 1
         let activelyTouching = isDragging || isDecelerating
-        if !userScrolling && !activelyTouching && !parkedInHistory {
+        // Quiet-window guard: the CC TUI inside the pmosh pane repaints ~18×/sec, and
+        // updateScroller runs on EVERY repaint. Right after a momentum flick settles,
+        // the next repaint (milliseconds later) would snap the view to bottom before the
+        // user has even read a frame. Refuse to re-anchor within `quietWindow` of the last
+        // user scroll touch — so a flick into history is protected against the flood.
+        let recentlyScrolled = Date().timeIntervalSince(lastUserScrollTouch) < quietWindow
+        if !userScrolling && !activelyTouching && !parkedInHistory && !recentlyScrolled {
             contentOffset = CGPoint (x: 0, y: bottomY)
         }
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize
     }
+
+    /// pmosh keeps-scrolling-down fix (6/28): timestamp of the last user scroll touch, and
+    /// the window after it during which updateScroller will NOT re-anchor to the bottom.
+    /// 350ms comfortably outlasts one repaint frame at the observed ~18Hz CC flood (~55ms),
+    /// so a settled flick isn't instantly clobbered, while live tailing resumes quickly.
+    private var lastUserScrollTouch: Date = .distantPast
+    private let quietWindow: TimeInterval = 0.35
 
     // pmosh #559 patch: drive `userScrolling` from real UIScrollView gestures so
     // updateScroller() knows when to leave the viewport alone.
