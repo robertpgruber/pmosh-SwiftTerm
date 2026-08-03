@@ -214,6 +214,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 #endif
     var cellDimension: CellDimension
 
+    /// pmosh fork addition (8/03/2026 pm): true when the viewport sits at the live
+    /// bottom and the user isn't parked in history — the app's scrollback-rebuild guard
+    /// (a repaint must never move the view while the user is reading history).
+    public func pmoshAtLiveBottom() -> Bool {
+        if userScrolling { return false }
+        let db = terminal.displayBuffer
+        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
+        return contentOffset.y >= bottom - 1
+    }
+
     /// pmosh fork addition (8/03/2026): the terminal's exact cell height, so the host app
     /// can size the terminal to a WHOLE number of rows. Without it the view's height is not
     /// a multiple of the cell height and the sub-row remainder renders as a dead strip
