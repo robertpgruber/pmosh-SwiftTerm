@@ -214,6 +214,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 #endif
     var cellDimension: CellDimension
 
+    /// pmosh fork addition (8/03/2026 pm): whether a text selection is active — the app
+    /// suppresses the drag-to-top pager trigger during selection (the selection edge
+    /// auto-scroll can reach the top of the buffer, and popping a sheet mid-selection
+    /// would eat the gesture).
+    public var pmoshSelectionActive: Bool { selection.active }
+
     /// pmosh fork addition (8/03/2026 pm): true when the viewport sits at the live
     /// bottom and the user isn't parked in history — the app's scrollback-rebuild guard
     /// (a repaint must never move the view while the user is reading history).
@@ -1063,6 +1069,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             gesture.require(toFail: endPan)
         }
         addGestureRecognizer(gesture)
+        // pmosh (8/03/2026, "drag select is still broken"): while a selection is active
+        // (this recognizer is only installed between Select and copy/dismiss), its drag
+        // must BEAT the scroll view's own pan — otherwise a vertical drag scrolls instead
+        // of extending the selection. This never showed while the local buffer was nearly
+        // empty (scroll pan had nothing to do); the moment real scrollback existed, the
+        // scroll pan started winning and selection drags died. Standard text-selection
+        // semantics: dragging adjusts the selection; edge auto-scroll (the selection
+        // timer) handles reaching off-screen content.
+        panGestureRecognizer.require(toFail: gesture)
         self.panSelectionGesture = gesture
     }
     
