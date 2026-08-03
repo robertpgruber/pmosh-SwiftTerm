@@ -213,6 +213,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 #endif
     var cellDimension: CellDimension
+
+    /// pmosh fork addition (8/03/2026): the terminal's exact cell height, so the host app
+    /// can size the terminal to a WHOLE number of rows. Without it the view's height is not
+    /// a multiple of the cell height and the sub-row remainder renders as a dead strip
+    /// below the last text row — Robert's "virgin line above the tmux border".
+    public var pmoshCellHeight: CGFloat { cellDimension.height }
     var caretView: CaretView?
     var _lineSpacing: CGFloat = 1.0
     var terminal: Terminal!
@@ -1666,6 +1672,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let recentlyScrolled = Date().timeIntervalSince(lastUserScrollTouch) < quietWindow
         if !userScrolling && !activelyTouching && !parkedInHistory && !recentlyScrolled {
             contentOffset = CGPoint (x: 0, y: bottomY)
+        } else if userScrolling && !activelyTouching {
+            // Parked in history: the engine compensates yDisp by one row per scrollback
+            // push so the TEXT stays put while the ring buffer rotates underneath. iOS
+            // paints from contentOffset (AppleTerminalView.swift:1183), not yDisp, so
+            // without this resync that compensation never reaches the screen and the
+            // content visibly creeps. Gated on !activelyTouching so it never fights a
+            // live finger.
+            let parkedY = CGFloat(terminal.displayBuffer.yDisp) * cellDimension.height
+            if abs(contentOffset.y - parkedY) > 0.5 {
+                contentOffset = CGPoint (x: 0, y: max(0, min(parkedY, bottomY)))
+            }
         }
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize
@@ -1684,7 +1701,28 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         lastUserScrollTouch = Date()
         let db = terminal.displayBuffer
         let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        if contentOffset.y < bottom - 1 { userScrolling = true }
+        if contentOffset.y < bottom - 1 { setScrolling(true) }
+    }
+
+    /// 🔴 THE DUAL-FLAG BUG (8/03/2026 — why flick-scrollback never actually held).
+    /// There are TWO `userScrolling` flags: this VIEW's (below, driven by the #559 gesture
+    /// patch) and the ENGINE's `Terminal.userScrolling` (Terminal.swift:438). The engine's
+    /// copy is the one that decides whether incoming output yanks the viewport:
+    ///     Terminal.scroll()  →  `if !userScrolling { buffer.yDisp = buffer.yBase }`
+    /// …and it was **never assigned true anywhere in the tree, fork or upstream** — so it
+    /// was permanently false and that snap fired on EVERY scroll event, bypassing the whole
+    /// #559 guard. The gesture patch was guarding a door the output never came through.
+    /// Keeping the two in lockstep also activates the engine's already-correct
+    /// rotating-scrollback compensation (`buffer.yDisp -= 1` per push, Terminal.swift:5353),
+    /// which is likewise gated on the engine flag and therefore had never once run.
+    private func setScrolling(_ on: Bool) {
+        userScrolling = on
+        terminal.userScrolling = on
+        if on {
+            // Park the ENGINE's viewport where the finger actually left it, so the
+            // compensation above has the right row to hold.
+            terminal.setViewYDisp(max(0, Int(contentOffset.y / cellDimension.height)))
+        }
     }
     // Stamp the quiet-window clock on every scroll movement (drag + momentum), but ONLY
     // when the user is actually driving it — `isDragging || isDecelerating` excludes the
@@ -1697,7 +1735,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         lastUserScrollTouch = Date()
         let db = terminal.displayBuffer
         let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        if contentOffset.y >= bottom - 1 { userScrolling = false }
+        setScrolling(contentOffset.y < bottom - 1)
     }
     // pmosh keeps-scrolling-down fix (6/28): a drag released WITHOUT a flick never
     // decelerates, so scrollViewDidEndDecelerating never fires. Resolve the flag here too:
@@ -1706,10 +1744,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         guard !decelerate else { return }   // deceleration path handles itself above
         let db = terminal.displayBuffer
         let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        userScrolling = contentOffset.y < bottom - 1
+        setScrolling(contentOffset.y < bottom - 1)
     }
     public func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
-        userScrolling = true
+        setScrolling(true)
     }
 
 #if canImport(MetalKit)
@@ -2455,6 +2493,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     func ensureCaretIsVisible ()
     {
         guard !terminal.synchronizedOutputActive else { return }
+        // Typing means "take me back to now" — clear BOTH flags, or the parked-resync
+        // branch in updateScroller() fights this jump on the very next repaint.
+        userScrolling = false
+        terminal.userScrolling = false
         let displayBuffer = terminal.displayBuffer
         contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
     }
