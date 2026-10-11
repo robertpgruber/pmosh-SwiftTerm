@@ -1667,12 +1667,22 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
     
+    /// pmosh 10/10: the bottom this view was anchored to BEFORE the current repaint grew
+    /// the buffer. "Parked in history" has to be judged against it, not the new bottom: on
+    /// the first line that overflows the screen the new bottom jumps from 0 to one row while
+    /// contentOffset is still 0, and judging against the new bottom called that "parked"
+    /// forever — output stopped tailing (verification run 10/10: `seq 1 400` left the view
+    /// on rows 1–29 until ⤓).
+    private var pmoshPreviousBottomY: CGFloat = 0
+
     func updateScroller ()
     {
         let displayBuffer = terminal.displayBuffer
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
                               height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
         let bottomY = CGFloat (displayBuffer.lines.count - displayBuffer.rows) * cellDimension.height
+        let previousBottomY = pmoshPreviousBottomY
+        pmoshPreviousBottomY = bottomY
         // pmosh #559 patch: only snap the viewport to the bottom when the user is NOT
         // scrolled up into history. Without this guard every new output line yanks the
         // view to the bottom, killing flick-scrollback (the whole point of pmosh).
@@ -1687,7 +1697,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         //      flag is never re-evaluated (there was no didEndDragging handler).
         // Fix: don't trust the edge-event flag alone — also treat "actively touching the
         // scroll view" and "parked above the bottom" as user-scrolled, computed LIVE here.
-        let parkedInHistory = contentOffset.y < bottomY - 1
+        let parkedInHistory = contentOffset.y < min(previousBottomY, bottomY) - 1
         // pmosh 10/10: a key-driven `setContentOffset(animated:)` (▲ ▼ ⤓ paging the local
         // buffer) is neither dragging nor decelerating, so without this flag the first
         // repaint re-anchored the view mid-animation. The animation counts as a touch.
