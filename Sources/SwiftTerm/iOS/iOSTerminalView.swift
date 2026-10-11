@@ -1775,20 +1775,56 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     public private(set) var pmoshProgrammaticScroll = false
 
     /// Animated scroll driven by a key rather than a finger, with the same bookkeeping the
-    /// gesture path does: the quiet-window stamp, the engine/view `userScrolling` flags and
-    /// the engine viewport are settled when the animation ends.
+    /// gesture path does once it ends: the engine/view `userScrolling` flags and the engine
+    /// viewport are settled, and at the live bottom tailing resumes at once.
+    ///
+    /// ⚠️ This view never assigns itself as its own UIScrollViewDelegate (nothing in the
+    /// fork or upstream does), so NO `scrollView…` delegate method here is ever called by
+    /// UIKit — including `scrollViewDidEndScrollingAnimation`. The first version of this
+    /// relied on it and left `pmoshProgrammaticScroll` true forever after a ⤓: the view
+    /// never re-anchored and output stopped tailing (verification run 10/10, `seq 401 450`
+    /// after ⤓ stayed on 373–400). The end of the animation is detected by polling the
+    /// offset instead: reached the target, or stopped moving, or 1.2 s.
+    private var pmoshKeyScrollGeneration = 0
+
     public func pmoshScroll(to y: CGFloat) {
         lastUserScrollTouch = Date()
         pmoshProgrammaticScroll = true
+        pmoshKeyScrollGeneration += 1
+        let gen = pmoshKeyScrollGeneration
         setContentOffset(CGPoint(x: 0, y: y), animated: true)
+        pmoshPollKeyScroll(gen: gen, target: y, last: contentOffset.y, ticks: 0)
+    }
+
+    private func pmoshPollKeyScroll(gen: Int, target: CGFloat, last: CGFloat, ticks: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, gen == self.pmoshKeyScrollGeneration else { return }
+            let y = self.contentOffset.y
+            let done = abs(y - target) < 0.5 || (ticks >= 2 && abs(y - last) < 0.5) || ticks >= 24
+            if done {
+                self.pmoshDidEndKeyScroll()
+            } else {
+                self.pmoshPollKeyScroll(gen: gen, target: target, last: y, ticks: ticks + 1)
+            }
+        }
+    }
+
+    private func pmoshDidEndKeyScroll() {
+        pmoshProgrammaticScroll = false
+        let db = terminal.displayBuffer
+        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
+        let parked = contentOffset.y < bottom - 1
+        // Parked: protect the page from the repaint flood like a settled flick. At the
+        // live bottom: no quiet window — a ⤓ means "follow", and the next line must tail.
+        lastUserScrollTouch = parked ? Date() : .distantPast
+        setScrolling(parked)
     }
 
     public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        pmoshProgrammaticScroll = false
-        lastUserScrollTouch = Date()
-        let db = terminal.displayBuffer
-        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        setScrolling(contentOffset.y < bottom - 1)
+        // Not called today (see pmoshScroll); kept so the key path is right if the view
+        // ever becomes its own delegate.
+        pmoshKeyScrollGeneration += 1
+        pmoshDidEndKeyScroll()
     }
 
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
