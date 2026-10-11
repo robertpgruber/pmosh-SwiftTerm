@@ -1688,7 +1688,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // Fix: don't trust the edge-event flag alone — also treat "actively touching the
         // scroll view" and "parked above the bottom" as user-scrolled, computed LIVE here.
         let parkedInHistory = contentOffset.y < bottomY - 1
-        let activelyTouching = isDragging || isDecelerating
+        // pmosh 10/10: a key-driven `setContentOffset(animated:)` (▲ ▼ ⤓ paging the local
+        // buffer) is neither dragging nor decelerating, so without this flag the first
+        // repaint re-anchored the view mid-animation. The animation counts as a touch.
+        let activelyTouching = isDragging || isDecelerating || pmoshProgrammaticScroll
         // Quiet-window guard: the CC TUI inside the pmosh pane repaints ~18×/sec, and
         // updateScroller runs on EVERY repaint. Right after a momentum flick settles,
         // the next repaint (milliseconds later) would snap the view to bottom before the
@@ -1754,8 +1757,30 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // programmatic re-anchor in updateScroller (which also mutates contentOffset and would
     // otherwise keep refreshing its own quiet window forever, freezing live tailing).
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if isDragging || isDecelerating { lastUserScrollTouch = Date() }
+        if isDragging || isDecelerating || pmoshProgrammaticScroll { lastUserScrollTouch = Date() }
     }
+    /// pmosh 10/10: true while a programmatic animated scroll (▲ ▼ ⤓) is in flight. Set by
+    /// `pmoshScroll(to:)`, cleared when UIKit reports the animation finished, at which point
+    /// the view is parked (or not) exactly like a finger that let go.
+    public private(set) var pmoshProgrammaticScroll = false
+
+    /// Animated scroll driven by a key rather than a finger, with the same bookkeeping the
+    /// gesture path does: the quiet-window stamp, the engine/view `userScrolling` flags and
+    /// the engine viewport are settled when the animation ends.
+    public func pmoshScroll(to y: CGFloat) {
+        lastUserScrollTouch = Date()
+        pmoshProgrammaticScroll = true
+        setContentOffset(CGPoint(x: 0, y: y), animated: true)
+    }
+
+    public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        pmoshProgrammaticScroll = false
+        lastUserScrollTouch = Date()
+        let db = terminal.displayBuffer
+        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
+        setScrolling(contentOffset.y < bottom - 1)
+    }
+
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         lastUserScrollTouch = Date()
         let db = terminal.displayBuffer
