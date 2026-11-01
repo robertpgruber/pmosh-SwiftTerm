@@ -1675,6 +1675,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// on rows 1–29 until ⤓).
     private var pmoshPreviousBottomY: CGFloat = 0
 
+    /// pmosh 10/31: `totalLinesTrimmed` of the buffer the scroller last saw. At the
+    /// scrollback cap every new line drops the oldest and moves every row up one, while the
+    /// content height stays the same — so a viewport left in history by a finger showed the
+    /// text creeping up a line per line of output (rob: "line line line scroll"). The engine's
+    /// own compensation (`yDisp -= 1` per trim) only runs with `terminal.userScrolling`, which
+    /// the finger path never sets: this view is not its own scroll delegate.
+    private var pmoshTrimmedSeen = 0
+    private weak var pmoshTrimmedBuffer: Buffer?
+
     func updateScroller ()
     {
         let displayBuffer = terminal.displayBuffer
@@ -1683,6 +1692,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let bottomY = CGFloat (displayBuffer.lines.count - displayBuffer.rows) * cellDimension.height
         let previousBottomY = pmoshPreviousBottomY
         pmoshPreviousBottomY = bottomY
+        // Above the live bottom, follow the TEXT through the trims instead of the pixel
+        // offset (at the bottom the re-anchor below tails as before). Also right during a
+        // drag or a coast: UIScrollView moves on from whatever offset it is given.
+        let trimmed = displayBuffer.totalLinesTrimmed
+        let rowsTrimmed = pmoshTrimmedBuffer === displayBuffer ? trimmed - pmoshTrimmedSeen : 0
+        pmoshTrimmedSeen = trimmed
+        pmoshTrimmedBuffer = displayBuffer
+        if rowsTrimmed > 0, contentOffset.y < previousBottomY - 1 {
+            contentOffset = CGPoint (x: 0, y: max(0, contentOffset.y - CGFloat(rowsTrimmed) * cellDimension.height))
+        }
         // pmosh #559 patch: only snap the viewport to the bottom when the user is NOT
         // scrolled up into history. Without this guard every new output line yanks the
         // view to the bottom, killing flick-scrollback (the whole point of pmosh).
