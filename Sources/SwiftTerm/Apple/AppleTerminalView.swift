@@ -1801,6 +1801,10 @@ extension TerminalView {
         metalView.setNeedsDisplay(metalView.bounds)
     }
 
+    /// pmosh 11/01: Metal frames drawn by every terminal view in the process, so the app can
+    /// see how many a tab swipe costs (its swipe log line).
+    public static var pmoshMetalDraws = 0
+
     func queueMetalDisplay() {
         guard metalView != nil else {
             return

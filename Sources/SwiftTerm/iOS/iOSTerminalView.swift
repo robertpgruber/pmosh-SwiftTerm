@@ -1950,8 +1950,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
 #if canImport(MetalKit)
         if useMetalRenderer, let metalView = metalView {
-            metalView.frame = bounds
-            requestMetalDisplay()
+            // pmosh 11/01: a layout pass with the same bounds neither moves the Metal view nor
+            // needs a new frame. UIKit lays a page out again on every frame it is moved (a tab
+            // swipe), and each pass used to redraw the whole terminal: 107 Metal frames for one
+            // 84-frame swipe, and in the simulator the GPU queue stalled the screen mid-swipe.
+            if sizeChanged || originChanged || metalView.frame != bounds {
+                metalView.frame = bounds
+                requestMetalDisplay()
+            }
         } else {
 	    if sizeChanged || originChanged {
                 setNeedsDisplay(bounds)
@@ -1969,7 +1975,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     open override var contentOffset: CGPoint {
         didSet {
 #if canImport(MetalKit)
-            if useMetalRenderer, metalView != nil {
+            // pmosh 11/01: only when the offset really moved. UIScrollView sets the same offset
+            // again from setFrame (_adjustContentOffsetIfNecessary), so a page that is only
+            // moved on screen (pmosh's tab swipe) asked for a full Metal frame every frame.
+            if useMetalRenderer, metalView != nil, contentOffset != oldValue {
                 requestMetalDisplay()
             }
 #endif

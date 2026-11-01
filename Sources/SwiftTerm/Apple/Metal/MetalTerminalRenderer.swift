@@ -322,6 +322,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             markPendingRedraw()
             return
         }
+        TerminalView.pmoshMetalDraws += 1
         guard let terminalView = terminalView else {
             frameSemaphore.signal()
             return
