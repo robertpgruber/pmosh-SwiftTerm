@@ -649,17 +649,58 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                        height: CGFloat (selection.end.row-selection.start.row+1)*cellDimension.height)
     }
     
+    /// pmosh (11/01/2026, rob: "the three d press to select doesnt even work"): press and hold on
+    /// text selects the word under the finger at once, as iOS text and Termius do, with a haptic
+    /// tick; the same finger keeps extending it and lifting shows Copy. Stock SwiftTerm only
+    /// offered Paste / Select / Select All here and needed a second tap on Select, and a drag
+    /// after the press scrolled the view. On blank cells the press still shows that menu: its
+    /// Paste is how a copied screen-cap goes up to the host.
     @objc func longPress (_ gestureRecognizer: UILongPressGestureRecognizer)
     {
-         if gestureRecognizer.state == .began {
-             let _ = self.becomeFirstResponder()
-             let tapLocation = gestureRecognizer.location(in: gestureRecognizer.view)
-             let tapRegion = makeContextMenuRegionForTap (point: tapLocation)
-             
-             showContextMenu (forRegion: tapRegion,
-                              pos: calculateTapHit (gesture: gestureRecognizer).grid)
-          }
+        var hit = calculateTapHit (gesture: gestureRecognizer).grid
+        // A press on the partial row under the last full one reads a row past the buffer.
+        hit.row = min (hit.row, terminal.displayBuffer.lines.count - 1)
+        switch gestureRecognizer.state {
+        case .began:
+            let _ = self.becomeFirstResponder()
+            let buffer = terminal.displayBuffer
+            let ch = terminal.getCharacter (for: buffer.getChar (atBufferRelative: hit))
+            if ch == " " || ch == Character (UnicodeScalar (0)) {
+                let tapLocation = gestureRecognizer.location(in: gestureRecognizer.view)
+                showContextMenu (forRegion: makeContextMenuRegionForTap (point: tapLocation), pos: hit)
+                return
+            }
+            selection.selectWordOrExpression (at: hit, in: buffer)
+            longPressWord = (selection.start, selection.end)
+            enableSelectionPanGesture ()
+            // The finger now extends the selection: a scroll the scroll view might have started
+            // on this touch is cancelled (disable + enable drops it from the touch in flight).
+            panGestureRecognizer.isEnabled = false
+            panGestureRecognizer.isEnabled = true
+            UIImpactFeedbackGenerator (style: .medium).impactOccurred ()
+            queuePendingDisplay ()
+        case .changed:
+            guard let word = longPressWord else { return }
+            // Anchored on the first word's far end, so that word stays selected either way.
+            selection.pivot = Position.compare (hit, word.start) == .before ? word.end : word.start
+            selection.pivotExtend (bufferPosition: hit)
+            requestDisplay ()
+        case .ended:
+            guard longPressWord != nil else { return }
+            longPressWord = nil
+            // Word by word under the finger (8 pt cells), character by character on the handles,
+            // as after a double tap.
+            selection.selectionMode = .character
+            showContextMenu (forRegion: makeContextMenuRegionForSelection (), pos: hit)
+        case .cancelled, .failed:
+            longPressWord = nil
+        default:
+            break
+        }
     }
+
+    /// The word a long press selected, while that press is still down.
+    var longPressWord: (start: Position, end: Position)?
     
     /// This controls whether the backspace should send ^? or ^H, the default is ^?
     public var backspaceSendsControlH: Bool = false
@@ -1092,7 +1133,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     func setupGestures ()
     {
         let longPress = UILongPressGestureRecognizer (target: self, action: #selector(longPress(_:)))
-        longPress.minimumPressDuration = 0.7
+        // pmosh (11/01/2026): UIKit's own 0.5 s, the hold every other app selects text at.
+        longPress.minimumPressDuration = 0.5
         addGestureRecognizer(longPress)
         
         let singleTap = UITapGestureRecognizer (target: self, action: #selector(singleTap(_:)))
