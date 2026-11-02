@@ -225,9 +225,146 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// (a repaint must never move the view while the user is reading history).
     public func pmoshAtLiveBottom() -> Bool {
         if userScrolling { return false }
+        return contentOffset.y >= pmoshBottomY - 1
+    }
+
+    /// The live bottom's offset: the screen's last row at the bottom of the view, or the row
+    /// `pmoshBlankTail` rows above it (11/02/2026). Every "is this the bottom" test in this view
+    /// reads it, so reaching the bottom of the content is reaching the live bottom.
+    var pmoshBottomY: CGFloat {
         let db = terminal.displayBuffer
-        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        return contentOffset.y >= bottom - 1
+        return CGFloat(max(0, db.lines.count - db.rows - pmoshTail)) * cellDimension.height
+    }
+
+    // MARK: pmosh (11/02/2026): the blank rows under a classic Claude Code frame stay out of view
+
+    /// rob: "when i open /status and close it it leave a empty block it doesnt revert the dead
+    /// soace", "still getting permannent indents from status eg". Claude Code's classic renderer
+    /// opens a dialog by adding rows under its frame, which scrolls the screen and pushes the
+    /// transcript's last lines into history; closing it erases those rows and draws the frame at
+    /// the dialog's top, and nothing brings the pushed lines back down. Measured in tmux (2.1.260,
+    /// 37 rows): 26 blank rows after /status, 30 after /model, 18 after any slash-command menu,
+    /// until new output fills them. The renderer ends its frame with the row under it blank, so
+    /// with this on, the live bottom rests on that row (pmoshMeasureBlankTail finds it): the
+    /// blank rows stay under the view and the history above fills it, which is the view from
+    /// before the dialog. Only on the main screen with mouse tracking off, only when every row
+    /// from there down is blank, and never more rows than there is history to show (a fresh
+    /// pane keeps its frame at the top). Nothing is cut from the buffer: the scroll view's
+    /// content just ends at that row.
+    public var pmoshTrimsBlankTail = false
+
+    /// Screen rows kept under the live bottom (0: the screen's last row is the bottom).
+    public private(set) var pmoshBlankTail = 0
+
+    /// `pmoshBlankTail` as it applies to the buffer on screen now.
+    var pmoshTail: Int {
+        guard pmoshBlankTail > 0, !terminal.isCurrentBufferAlternate else { return 0 }
+        let db = terminal.displayBuffer
+        return min(pmoshBlankTail, max(0, db.lines.count - db.rows))
+    }
+
+    private var pmoshTailSettle: DispatchWorkItem?
+    /// How long the output has to rest before a larger tail is taken (see pmoshTailAfterPaint).
+    static let pmoshTailQuiet: TimeInterval = 0.035
+    /// How long a shell prompt has to hold before its tail is dropped.
+    static let pmoshTailUnsure: TimeInterval = 0.5
+    /// A tail grows only by this many rows or more. Claude Code 2.1.263 drops a footer hint
+    /// row or two while the input has text and brings them back when it is empty (iMac,
+    /// 11/02), and the view must not move for that; a closed dialog or menu leaves 18 or more.
+    static let pmoshTailMinGrowth = 4
+
+    /// What the screen calls for. The view rests on the row under Claude Code's frame: the row
+    /// its hidden cursor is parked on (2.1.260, rob's panes), or the row after the last one
+    /// drawn when the cursor is shown on the input line with the rest of the frame under it
+    /// (2.1.263, the iMac's). Both are max(cursor's row, last drawn row + 1), and resting there
+    /// never hides the cursor's row or anything drawn: `fit`. `want` is `fit`, except a shown
+    /// cursor with nothing drawn under it — a shell's prompt (after `clear`, on the top row)
+    /// keeps its own screen, no tail. Mid-frame (the renderer's cursor up in its frame, working
+    /// down) reads as a row or so off, which pmoshTailMinGrowth leaves alone.
+    func pmoshMeasureBlankTail() -> (fit: Int, want: Int) {
+        guard pmoshTrimsBlankTail, !terminal.isCurrentBufferAlternate, terminal.mouseMode == .off else { return (0, 0) }
+        let b = terminal.displayBuffer
+        let rows = b.rows
+        let cursorRow = b.y
+        let history = max(0, b.lines.count - rows)
+        guard history > 0, cursorRow >= 0, cursorRow < rows - 1, b.yBase + rows <= b.lines.count else { return (0, 0) }
+        var last = rows - 1
+        while last >= 0, Self.pmoshIsBlank(b.lines[b.yBase + last]) { last -= 1 }
+        let anchor = max(cursorRow, last + 1)
+        let fit = anchor < rows - 1 ? min(rows - 1 - anchor, history) : 0
+        let shellPrompt = !terminal.cursorHidden && last <= cursorRow
+        return (fit, shellPrompt ? 0 : fit)
+    }
+
+    /// No glyph and nothing drawn: a space or an empty cell on the default background, with no
+    /// inverse, underline or strike-through to show.
+    static func pmoshIsBlank(_ line: BufferLine) -> Bool {
+        let shown: CharacterStyle = [.inverse, .underline, .crossedOut]
+        for i in 0..<line.count {
+            let c = line[i]
+            if c.code != 0 && c.code != 32 { return false }
+            if c.attribute.bg != .defaultColor || !c.attribute.style.intersection(shown).isEmpty
+                || c.attribute.underlineStyle != .none { return false }
+        }
+        return true
+    }
+
+    /// After every paint. A tail larger than `fit` shrinks to it at once, so nothing drawn and
+    /// no new output ever sits under the view. A tail grows only by `pmoshTailMinGrowth` or
+    /// more, once the output has rested `pmoshTailQuiet` (%output can split a frame) and no
+    /// finger or key scroll is moving the view. A shell prompt's "no tail" waits
+    /// `pmoshTailUnsure`, so a renderer caught between erasing and drawing never drops the
+    /// view; a paint that disagrees cancels it.
+    func pmoshTailAfterPaint() {
+        guard pmoshTrimsBlankTail else { return }
+        let m = pmoshMeasureBlankTail()
+        if m.fit < pmoshBlankTail {
+            pmoshSetBlankTail(m.fit)
+        }
+        if m.want < pmoshBlankTail {
+            pmoshScheduleTailSettle(after: Self.pmoshTailUnsure)
+        } else if m.want >= pmoshBlankTail + Self.pmoshTailMinGrowth {
+            pmoshScheduleTailSettle(after: Self.pmoshTailQuiet)
+        } else {
+            pmoshTailSettle?.cancel()
+            pmoshTailSettle = nil
+        }
+    }
+
+    /// The settle: a new paint cancels it and starts the clock again.
+    private func pmoshScheduleTailSettle(after delay: TimeInterval) {
+        pmoshTailSettle?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pmoshTailSettle = nil
+            let m = self.pmoshMeasureBlankTail()
+            if m.fit < self.pmoshBlankTail {
+                self.pmoshSetBlankTail(m.fit)
+            }
+            if m.want < self.pmoshBlankTail {
+                if delay >= Self.pmoshTailUnsure {
+                    self.pmoshSetBlankTail(m.want)
+                } else {
+                    self.pmoshScheduleTailSettle(after: Self.pmoshTailUnsure)
+                }
+            } else if m.want >= self.pmoshBlankTail + Self.pmoshTailMinGrowth {
+                if self.pmoshViewMoving {
+                    self.pmoshScheduleTailSettle(after: Self.pmoshTailQuiet)
+                } else {
+                    self.pmoshSetBlankTail(m.want)
+                }
+            }
+        }
+        pmoshTailSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private var pmoshViewMoving: Bool { isDragging || isDecelerating || pmoshProgrammaticScroll }
+
+    private func pmoshSetBlankTail(_ tail: Int) {
+        guard tail != pmoshBlankTail else { return }
+        pmoshBlankTail = tail
+        updateScroller()
     }
 
     /// pmosh fork addition (8/03/2026): the terminal's exact cell height, so the host app
@@ -1737,6 +1874,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var lineLeading: CGFloat = 0
     
     open func bufferActivated(source: Terminal) {
+        // pmosh 11/02: a tail measured on the other screen says nothing about this one.
+        pmoshBlankTail = 0
         updateScroller ()
     }
     
@@ -1844,9 +1983,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     func updateScroller ()
     {
         let displayBuffer = terminal.displayBuffer
+        // pmosh 11/02: the content ends at the live bottom, the blank tail under it left out.
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
-                              height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
-        let bottomY = CGFloat (displayBuffer.lines.count - displayBuffer.rows) * cellDimension.height
+                              height: CGFloat (displayBuffer.lines.count - pmoshTail) * cellDimension.height)
+        let bottomY = pmoshBottomY
         let previousBottomY = pmoshPreviousBottomY
         pmoshPreviousBottomY = bottomY
         // Above the live bottom, follow the TEXT through the trims instead of the pixel
@@ -1913,9 +2053,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // updateScroller() knows when to leave the viewport alone.
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         lastUserScrollTouch = Date()
-        let db = terminal.displayBuffer
-        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        if contentOffset.y < bottom - 1 { setScrolling(true) }
+        if contentOffset.y < pmoshBottomY - 1 { setScrolling(true) }
     }
 
     /// 🔴 THE DUAL-FLAG BUG (8/03/2026 — why flick-scrollback never actually held).
@@ -1987,9 +2125,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     private func pmoshDidEndKeyScroll() {
         pmoshProgrammaticScroll = false
-        let db = terminal.displayBuffer
-        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        let parked = contentOffset.y < bottom - 1
+        let parked = contentOffset.y < pmoshBottomY - 1
         // Parked: protect the page from the repaint flood like a settled flick. At the
         // live bottom: no quiet window — a ⤓ means "follow", and the next line must tail.
         lastUserScrollTouch = parked ? Date() : .distantPast
@@ -2005,18 +2141,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         lastUserScrollTouch = Date()
-        let db = terminal.displayBuffer
-        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        setScrolling(contentOffset.y < bottom - 1)
+        setScrolling(contentOffset.y < pmoshBottomY - 1)
     }
     // pmosh keeps-scrolling-down fix (6/28): a drag released WITHOUT a flick never
     // decelerates, so scrollViewDidEndDecelerating never fires. Resolve the flag here too:
     // if the gentle drag-release left us at the bottom, follow live output again.
     public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         guard !decelerate else { return }   // deceleration path handles itself above
-        let db = terminal.displayBuffer
-        let bottom = CGFloat(db.lines.count - db.rows) * cellDimension.height
-        setScrolling(contentOffset.y < bottom - 1)
+        setScrolling(contentOffset.y < pmoshBottomY - 1)
     }
     public func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
         setScrolling(true)
@@ -2778,8 +2910,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // branch in updateScroller() fights this jump on the very next repaint.
         userScrolling = false
         terminal.userScrolling = false
-        let displayBuffer = terminal.displayBuffer
-        contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
+        // pmosh 11/02: the live bottom, blank tail and all (every key typed after closing /status
+        // dropped the view back onto the blank rows).
+        contentOffset = CGPoint (x: 0, y: pmoshBottomY)
     }
     
     open func deleteBackward() {
