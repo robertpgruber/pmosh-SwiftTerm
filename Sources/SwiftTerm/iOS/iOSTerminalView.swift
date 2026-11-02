@@ -678,14 +678,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             panGestureRecognizer.isEnabled = false
             panGestureRecognizer.isEnabled = true
             UIImpactFeedbackGenerator (style: .medium).impactOccurred ()
+            let point = gestureRecognizer.location(in: self)
+            beginLoupe(at: point, widget: nil)
+            moveLoupe(to: point, endpoint: selection.end, trailingEdge: true)
             queuePendingDisplay ()
         case .changed:
-            guard let word = longPressWord else { return }
-            // Anchored on the first word's far end, so that word stays selected either way.
-            selection.pivot = Position.compare (hit, word.start) == .before ? word.end : word.start
-            selection.pivotExtend (bufferPosition: hit)
-            requestDisplay ()
+            let point = gestureRecognizer.location(in: self)
+            extendLongPress(to: point)
+            updateAutoscroll(finger: point)
         case .ended:
+            stopAutoscroll()
+            endLoupe()
             guard longPressWord != nil else { return }
             longPressWord = nil
             // Word by word under the finger (8 pt cells), character by character on the handles,
@@ -693,6 +696,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             selection.selectionMode = .character
             showContextMenu (forRegion: makeContextMenuRegionForSelection (), pos: hit)
         case .cancelled, .failed:
+            stopAutoscroll()
+            endLoupe()
             longPressWord = nil
         default:
             break
@@ -701,6 +706,109 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     /// The word a long press selected, while that press is still down.
     var longPressWord: (start: Position, end: Position)?
+
+    /// The long press's finger at `point` (content space): the selection runs from the first
+    /// word to the word under the finger, anchored on that word's far end so it stays selected
+    /// either way, and the loupe follows the end that moves.
+    private func extendLongPress(to point: CGPoint) {
+        guard let word = longPressWord else { return }
+        var hit = calculateTapHit(point: point).grid
+        hit.row = min(hit.row, terminal.displayBuffer.lines.count - 1)
+        let before = Position.compare(hit, word.start) == .before
+        selection.pivot = before ? word.end : word.start
+        selection.pivotExtend(bufferPosition: hit)
+        requestDisplay()
+        moveLoupe(to: point, endpoint: before ? selection.start : selection.end, trailingEdge: !before)
+    }
+
+    // MARK: pmosh (11/01/2026): the loupe and edge auto-scroll while selecting
+    //
+    // rob: "u fixed the selectir drag select its so ass". At 8 pt a fingertip hides ~10 columns
+    // and 4 rows, the very cells being chosen: the system loupe (iOS 17, UITextLoupeSession; a
+    // live portal of this view, so the Metal-drawn text shows in it) magnifies the moving end
+    // above the finger, as in any iOS text. Near the top or bottom edge the view scrolls on its
+    // own, faster the deeper the finger, so a selection can reach past the screen.
+
+    private var loupe: AnyObject?
+
+    private func beginLoupe(at point: CGPoint, widget: UIView?) {
+        guard #available(iOS 17.0, *) else { return }
+        (loupe as? UITextLoupeSession)?.invalidate()
+        loupe = UITextLoupeSession.begin(at: point, fromSelectionWidgetView: widget, in: self)
+    }
+
+    /// `endpoint`: the selection end that is moving; `trailingEdge`: its caret sits after the
+    /// cell (the end) rather than before it (the start). Off screen, the loupe follows the finger.
+    private func moveLoupe(to point: CGPoint, endpoint: Position, trailingEdge: Bool) {
+        guard #available(iOS 17.0, *), let session = loupe as? UITextLoupeSession else { return }
+        let x = CGFloat(endpoint.col + (trailingEdge ? 1 : 0)) * cellDimension.width
+        let caret = CGRect(x: x - 1, y: CGFloat(endpoint.row) * cellDimension.height,
+                           width: 2, height: cellDimension.height)
+        if bounds.intersects(caret) {
+            session.move(to: point, withCaretRect: caret, trackingCaret: true)
+        } else {
+            session.move(to: point, withCaretRect: .null, trackingCaret: false)
+        }
+    }
+
+    private func endLoupe() {
+        if #available(iOS 17.0, *) { (loupe as? UITextLoupeSession)?.invalidate() }
+        loupe = nil
+    }
+
+    private var autoscrollLink: CADisplayLink?
+    /// The finger in the visible frame (content offset taken out), while selecting.
+    private var autoscrollFinger: CGPoint?
+    private var autoscrollTime: CFTimeInterval = 0
+    /// A band this deep inside the top and bottom edges scrolls, up to `autoscrollSpeed` pt/s
+    /// at the very edge (WebKit's curve, scaled to a phone terminal).
+    private static let autoscrollBand: CGFloat = 40
+    private static let autoscrollSpeed: CGFloat = 700
+
+    private func updateAutoscroll(finger point: CGPoint) {
+        let f = CGPoint(x: point.x - bounds.minX, y: point.y - bounds.minY)
+        autoscrollFinger = f
+        let band = Self.autoscrollBand
+        guard f.y < band || f.y > bounds.height - band else {
+            autoscrollLink?.invalidate()
+            autoscrollLink = nil
+            return
+        }
+        guard autoscrollLink == nil else { return }
+        autoscrollTime = 0
+        let link = CADisplayLink(target: self, selector: #selector(autoscrollTick(_:)))
+        link.add(to: .main, forMode: .common)
+        autoscrollLink = link
+    }
+
+    private func stopAutoscroll() {
+        autoscrollLink?.invalidate()
+        autoscrollLink = nil
+        autoscrollFinger = nil
+    }
+
+    @objc private func autoscrollTick(_ link: CADisplayLink) {
+        guard let f = autoscrollFinger, longPressWord != nil || draggedHandle != nil else {
+            stopAutoscroll()
+            return
+        }
+        let dt = autoscrollTime == 0 ? link.duration : link.timestamp - autoscrollTime
+        autoscrollTime = link.timestamp
+        let band = Self.autoscrollBand
+        let depth: CGFloat = f.y < band ? -(band - f.y) / band
+            : (f.y > bounds.height - band ? (f.y - (bounds.height - band)) / band : 0)
+        let maxY = max(0, contentSize.height - bounds.height)
+        let y = min(max(contentOffset.y + max(-1, min(1, depth)) * Self.autoscrollSpeed * CGFloat(dt), 0), maxY)
+        guard y != contentOffset.y else { return }
+        contentOffset.y = y
+        // The finger rests; the text moved under it.
+        let point = CGPoint(x: f.x + bounds.minX, y: f.y + bounds.minY)
+        if longPressWord != nil {
+            extendLongPress(to: point)
+        } else if let g = handleGrab {
+            moveHandle(to: point, grab: g)
+        }
+    }
     
     /// This controls whether the backspace should send ^? or ^H, the default is ^?
     public var backspaceSendsControlH: Bool = false
@@ -1426,7 +1534,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
         func makeKnob() -> UIView {
             let d = selectionHandleDiameter
-            let v = UIView(frame: CGRect(x: 0, y: 0, width: d, height: d))
+            let v = SelectionKnob(frame: CGRect(x: 0, y: 0, width: d, height: d))
             v.backgroundColor = _selectionHandleColor
             v.layer.cornerRadius = d / 2
             v.layer.shadowColor = UIColor.black.cgColor
@@ -1510,59 +1618,66 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         return Position(col: col, row: row)
     }
 
-    /// Pan handler for the START handle knob.
-    @objc private func panStartHandle(_ gesture: UIPanGestureRecognizer) {
+    /// pmosh (11/01/2026): a handle drag moves its end WITH the finger from where it took hold,
+    /// instead of jumping the end to the cell under the finger (with the 44 pt grab, that jump
+    /// was up to two cells), plus the loupe and the edge auto-scroll. `anchor`: the middle of the
+    /// end's cell; `touch`: the touch-down point (the pan reports after its start-up slop).
+    private var handleGrab: (anchor: CGPoint, touch: CGPoint, which: DraggedHandle)?
+
+    private func dragHandle(_ gesture: UIPanGestureRecognizer, _ which: DraggedHandle) {
         switch gesture.state {
         case .began:
-            draggedHandle = .start
-            // Dragging the start handle: pivot is the END so start moves freely.
-            selection.pivot = selection.end
+            draggedHandle = which
+            // The other end is the pivot, so this one moves freely.
+            selection.pivot = which == .start ? selection.end : selection.start
             stopSelectionTimer()
-        case .changed:
+            let end = which == .start ? selection.start : selection.end
+            let anchor = CGPoint(x: (CGFloat(end.col) + 0.5) * cellDimension.width,
+                                 y: (CGFloat(end.row) + 0.5) * cellDimension.height)
             let loc = gesture.location(in: self)
-            let hit = bufferPosition(from: loc)
-            selection.pivotExtend(bufferPosition: hit)
-            updateSelectionHandles()
-            requestDisplay()
+            let t = gesture.translation(in: self)
+            handleGrab = (anchor, CGPoint(x: loc.x - t.x, y: loc.y - t.y), which)
+            beginLoupe(at: loc, widget: gesture.view)
+            moveLoupe(to: loc, endpoint: end, trailingEdge: which == .end)
+        case .changed:
+            guard let g = handleGrab else { return }
+            let loc = gesture.location(in: self)
+            moveHandle(to: loc, grab: g)
+            updateAutoscroll(finger: loc)
         case .ended:
             draggedHandle = nil
+            handleGrab = nil
             stopSelectionTimer()
+            stopAutoscroll()
+            endLoupe()
             showContextMenu(forRegion: makeContextMenuRegionForSelection(),
                             pos: bufferPosition(from: gesture.location(in: self)))
         case .cancelled, .failed:
             draggedHandle = nil
+            handleGrab = nil
             stopSelectionTimer()
+            stopAutoscroll()
+            endLoupe()
         default:
             break
         }
     }
 
-    /// Pan handler for the END handle knob.
-    @objc private func panEndHandle(_ gesture: UIPanGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            draggedHandle = .end
-            // Dragging the end handle: pivot is the START so end moves freely.
-            selection.pivot = selection.start
-            stopSelectionTimer()
-        case .changed:
-            let loc = gesture.location(in: self)
-            let hit = bufferPosition(from: loc)
-            selection.pivotExtend(bufferPosition: hit)
-            updateSelectionHandles()
-            requestDisplay()
-        case .ended:
-            draggedHandle = nil
-            stopSelectionTimer()
-            showContextMenu(forRegion: makeContextMenuRegionForSelection(),
-                            pos: bufferPosition(from: gesture.location(in: self)))
-        case .cancelled, .failed:
-            draggedHandle = nil
-            stopSelectionTimer()
-        default:
-            break
-        }
+    private func moveHandle(to loc: CGPoint, grab g: (anchor: CGPoint, touch: CGPoint, which: DraggedHandle)) {
+        let target = CGPoint(x: g.anchor.x + loc.x - g.touch.x, y: g.anchor.y + loc.y - g.touch.y)
+        selection.pivotExtend(bufferPosition: bufferPosition(from: target))
+        updateSelectionHandles()
+        requestDisplay()
+        // Dragged past the pivot, the moving end is the selection's other end.
+        let movingIsEnd = selection.pivot == selection.start
+        moveLoupe(to: loc, endpoint: movingIsEnd ? selection.end : selection.start, trailingEdge: movingIsEnd)
     }
+
+    /// Pan handler for the START handle knob.
+    @objc private func panStartHandle(_ gesture: UIPanGestureRecognizer) { dragHandle(gesture, .start) }
+
+    /// Pan handler for the END handle knob.
+    @objc private func panEndHandle(_ gesture: UIPanGestureRecognizer) { dragHandle(gesture, .end) }
 
     // MARK: - End selection handles
 
@@ -3498,3 +3613,12 @@ extension TerminalView: UIAccessibilityReadingContent {
 #endif
 
 #endif
+
+/// A selection handle: drawn 14 pt, grabbed anywhere within 22 pt of its centre, the 44 pt target
+/// iOS's own handles have (pmosh 11/01/2026: a 14 pt knob was nearly impossible to catch).
+private final class SelectionKnob: UIView {
+    static let reach: CGFloat = 22
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        hypot(point.x - bounds.midX, point.y - bounds.midY) <= Self.reach
+    }
+}
