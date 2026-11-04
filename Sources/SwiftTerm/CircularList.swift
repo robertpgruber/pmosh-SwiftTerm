@@ -432,4 +432,23 @@ internal class CircularBufferLineList {
             return count == maxLength
         }
     }
+
+    /// pmosh (11/03/2026): drops `count` lines starting at `start` and closes the gap. The
+    /// slots left past the end are emptied (`splice` leaves them pointing at lines that are
+    /// still in the list, so a later grow would hand the same line out twice).
+    func pmoshRemove (start: Int, count n: Int)
+    {
+        guard n > 0, start >= 0, start + n <= count else { return }
+        let old = count
+        var i = start
+        while i + n < old {
+            array [getCyclicIndex(i)] = array [getCyclicIndex(i + n)]
+            i += 1
+        }
+        while i < old {
+            array [getCyclicIndex(i)] = nil
+            i += 1
+        }
+        count = old - n
+    }
 }

@@ -340,6 +340,14 @@ open class Terminal {
      */
     public private(set) var buffer: Buffer
 
+    /// pmosh (11/03/2026): full-view erases Claude Code's classic renderer has sent on the
+    /// main screen — CUP home, then EL 2 and CUD 1 on every row from the top, then CUP home —
+    /// each one followed by a repaint of its screen's tail (PmoshHistorySeam.swift).
+    public internal(set) var pmoshViewportClears = 0
+    /// Rows erased in order since the last CUP home, or -1 outside such a run.
+    var pmoshClearRun = -1
+    var pmoshClearAwaitsDown = false
+
     private let synchronizedOutputTimeoutSeconds: TimeInterval = 1.0
     public private(set) var synchronizedOutputActive: Bool = false
     private var synchronizedOutputTimeoutItem: DispatchWorkItem?

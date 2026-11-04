@@ -367,6 +367,80 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         updateScroller()
     }
 
+    // MARK: pmosh (11/03/2026): what Claude Code's rewind leaves in history goes
+
+    /// rob: "when u rewind in pmosh it looks like it leaves junk". Claude Code's classic renderer
+    /// rewrites only the rows in view, so a rewind leaves the rewound turns in history: right
+    /// above its frame, where the blank tail shows them as if they were still there, or —
+    /// rewinding further back than the view is tall — the whole old conversation above a repeat of
+    /// the new one's last rows (PmoshHistorySeam.swift). With this on, the view looks for the
+    /// rewind whenever the output rests (PmoshSeamWatch) and drops those rows: only after the
+    /// rewind dialog's confirmation step was on screen and its message is back in the input, and
+    /// only from a found row to the end of history.
+    public var pmoshDropsRewoundHistory = false
+
+    /// Told after a drop: rows dropped, where the seam was found ("rewind": the rewound
+    /// message's row; "repaint": where history starts repeating a full repaint), and the seam by
+    /// content (`pmoshCutAnchors`): tmux's own history still holds the rows.
+    public var pmoshOnRewoundHistoryDropped: ((_ rows: Int, _ reason: String, _ at: Terminal.PmoshCutAnchors) -> Void)?
+
+    private let pmoshSeamWatch = PmoshSeamWatch()
+    private var pmoshSeamLookItem: DispatchWorkItem?
+    /// How long the output rests before the watch looks: a paint that %output split into
+    /// several lines has landed by then.
+    static let pmoshSeamQuiet: TimeInterval = 0.06
+
+    /// After every paint; a new paint cancels the look and starts the clock again.
+    func pmoshSeamAfterPaint() {
+        guard pmoshDropsRewoundHistory else { return }
+        pmoshSeamLookItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.pmoshSeamLook() }
+        pmoshSeamLookItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pmoshSeamQuiet, execute: work)
+    }
+
+    private func pmoshSeamLook() {
+        pmoshSeamLookItem = nil
+        guard pmoshDropsRewoundHistory, !terminal.isCurrentBufferAlternate else { return }
+        // A finger or a key scroll is moving the view: look once it stops.
+        if pmoshViewMoving {
+            pmoshSeamAfterPaint()
+            return
+        }
+        guard let cut = pmoshSeamWatch.settle(terminal) else { return }
+        pmoshSeamWatch.reset(terminal)
+        pmoshDropHistory(from: cut.from, reason: cut.reason.rawValue)
+    }
+
+    /// Drops history from buffer row `row` to its end. The live bottom stays the live bottom; a
+    /// view parked in history keeps its rows, and one parked inside the dropped rows lands on the
+    /// seam.
+    func pmoshDropHistory(from row: Int, reason: String) {
+        let h = cellDimension.height
+        let parked = !pmoshAtLiveBottom()
+        let topRow = h > 0 ? contentOffset.y / h : 0
+        let anchors = terminal.pmoshCutAnchors(at: row)
+        let n = terminal.pmoshCutHistory(from: row)
+        guard n > 0 else { return }
+        selection.selectNone()
+        search.invalidate()
+        pmoshPreviousBottomY = pmoshBottomY
+        if parked {
+            var r = topRow
+            if r >= CGFloat(row + n) {
+                r -= CGFloat(n)
+            } else if r > CGFloat(row) {
+                r = CGFloat(row)
+            }
+            contentOffset = CGPoint(x: 0, y: max(0, min(r * h, pmoshBottomY)))
+        }
+        updateScroller()
+        pmoshTailAfterPaint()
+        terminal.updateFullScreen()
+        queuePendingDisplay()
+        pmoshOnRewoundHistoryDropped?(n, reason, anchors)
+    }
+
     /// pmosh fork addition (8/03/2026): the terminal's exact cell height, so the host app
     /// can size the terminal to a WHOLE number of rows. Without it the view's height is not
     /// a multiple of the cell height and the sub-row remainder renders as a dead strip
@@ -1876,6 +1950,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     open func bufferActivated(source: Terminal) {
         // pmosh 11/02: a tail measured on the other screen says nothing about this one.
         pmoshBlankTail = 0
+        // pmosh 11/03: nor does a rewind dialog seen there.
+        pmoshSeamWatch.forget(source)
         updateScroller ()
     }
     

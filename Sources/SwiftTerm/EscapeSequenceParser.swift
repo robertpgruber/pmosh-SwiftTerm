@@ -380,6 +380,7 @@ public class EscapeSequenceParser {
             csiHandlerFallback(pars, collect, code)
             return
         }
+        terminal.pmoshTrackClear(code: code, pars: pars, collect: collect)
         switch code {
         case 0x40: terminal.cmdInsertChars(pars, collect)       // @
         case 0x41: terminal.cmdCursorUp(pars, collect)          // A

@@ -1620,6 +1620,8 @@ extension TerminalView {
         #if os(iOS) || os(visionOS)
         // pmosh 11/02/2026: where the live bottom rests (iOSTerminalView, the blank tail).
         pmoshTailAfterPaint()
+        // pmosh 11/03/2026: what a Claude Code rewind left in history (iOSTerminalView).
+        pmoshSeamAfterPaint()
         #endif
         guard let (rowStart, rowEnd) = terminal.getUpdateRange () else {
             SyncDebug.log("paint-norange (cursor-only)")
