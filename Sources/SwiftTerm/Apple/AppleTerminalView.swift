@@ -870,6 +870,11 @@ extension TerminalView {
         guard let selection = self.selection, selection.active else {
             return nil
         }
+#if os(iOS) || os(visionOS)
+        if pmoshNativeSelection {
+            return pmoshHuggedColumns(row: row, cols: cols, selection: selection)
+        }
+#endif
 
         let startRow = selection.start.row
         let endRow = selection.end.row
@@ -932,6 +937,50 @@ extension TerminalView {
         return lowerBound..<upperBound
     }
     
+    /// pmosh 11/04/2026 (rob: "the select tool is terrible uve integrate what apple give su
+    /// terribly into this app"): the selection's columns on `row` the way iOS text draws its
+    /// highlight. From where the selection starts (or the row's start) to where it ends; on a row
+    /// the selection runs past, to the row's last character plus one cell for its line break,
+    /// never on to the screen's edge across blank cells. A row that wraps on runs to the edge.
+    func pmoshHuggedColumns(row: Int, cols: Int, selection: SelectionService) -> Range<Int>? {
+        let swapped = Position.compare(selection.start, selection.end) == .after
+        let s = swapped ? selection.end : selection.start
+        let e = swapped ? selection.start : selection.end
+        guard s != e, row >= s.row, row <= e.row else {
+            return nil
+        }
+        let lower = row == s.row ? min(max(0, s.col), cols) : 0
+        let upper: Int
+        if row == e.row {
+            upper = min(max(0, e.col), cols)
+        } else {
+            let lines = terminal.displayBuffer.lines
+            let wraps = row + 1 < lines.count && lines[row + 1].isWrapped
+            upper = wraps ? cols : min(cols, max(pmoshTextEnd(row: row), lower) + 1)
+        }
+        return lower < upper ? lower..<upper : nil
+    }
+
+    /// pmosh 11/04/2026: the column after the last character on buffer row `row`, spaces and
+    /// empty cells not counting; 0 for a blank row. Selection ends snap to it, and the
+    /// highlight stops at it.
+    func pmoshTextEnd(row: Int) -> Int {
+        let buffer = terminal.displayBuffer
+        guard row >= 0, row < buffer.lines.count else {
+            return 0
+        }
+        let line = buffer.lines[row]
+        var c = min(line.count, terminal.cols)
+        while c > 0 {
+            let cell = line[c - 1]
+            if cell.code != 0 && cell.code != 32 {
+                return min(terminal.cols, c - 1 + max(1, Int(cell.width)))
+            }
+            c -= 1
+        }
+        return 0
+    }
+
     func isColumnSelected(_ selectionRange: Range<Int>?, column: Int, width: Int) -> Bool {
         guard let selectionRange else {
             return false

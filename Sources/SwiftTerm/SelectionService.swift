@@ -114,6 +114,34 @@ class SelectionService: CustomDebugStringConvertible {
     }
     
     /**
+     * pmosh 11/04/2026: sets the range as given. `end` may be `cols`, the boundary after the last
+     * column, which `setSelection` would clamp onto the last column (and leave it unselected).
+     */
+    public func pmoshSetRange (start: Position, end: Position) {
+        self.start = start
+        self.end = end
+        setActiveAndNotify()
+    }
+
+    /**
+     * pmosh 11/04/2026: the buffer dropped `rows` lines off its top (the scrollback cap): the
+     * selection moves up with its text, and ends once its text is gone.
+     */
+    func pmoshShift (rows: Int) {
+        guard active, rows > 0 else { return }
+        if min (start.row, end.row) - rows < 0 {
+            selectNone ()
+            return
+        }
+        start = Position (col: start.col, row: start.row - rows)
+        end = Position (col: end.col, row: end.row - rows)
+        if let p = pivot {
+            pivot = Position (col: p.col, row: p.row - rows)
+        }
+        terminal.tdel?.selectionChanged (source: terminal)
+    }
+
+    /**
      * Starts selection, the range is determined by the last start position
      */
     public func startSelection ()

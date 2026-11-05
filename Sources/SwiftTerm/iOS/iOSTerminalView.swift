@@ -220,6 +220,20 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// would eat the gesture).
     public var pmoshSelectionActive: Bool { selection.active }
 
+    /// pmosh fork addition (11/04/2026): the selection drawn and moved the way iOS text does it.
+    /// The highlight hugs the text (pmoshHuggedColumns) and the ends snap to it. The handles are
+    /// iOS's bar and knob, and the menu is UIEditMenuInteraction's, placed off the selection.
+    /// A drag that isn't on a handle scrolls. Off: stock SwiftTerm's shapes.
+    public var pmoshNativeSelection = false
+
+    /// pmosh fork addition (11/04/2026): called for every key typed, paste and hardware key this
+    /// view sends (send(data:)), never for the terminal's own answers to the host's queries.
+    public var pmoshOnUserInput: (() -> Void)?
+
+    /// pmosh fork addition (11/04/2026): a finger is choosing text right now, the press that
+    /// selected a word still down or a handle being dragged. A selection merely shown is not.
+    public var pmoshSelecting: Bool { longPressWord != nil || draggedHandle != nil }
+
     /// pmosh fork addition (8/03/2026 pm): true when the viewport sits at the live
     /// bottom and the user isn't parked in history — the app's scrollback-rebuild guard
     /// (a repaint must never move the view while the user is reading history).
@@ -765,12 +779,36 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     @objc open override func copy(_ sender: Any?) {
+        if pmoshNativeSelection {
+            // pmosh 11/04/2026: the text as it reads, without the blanks that pad each row; the
+            // selection stays, as in iOS text, until a tap elsewhere or a key ends it.
+            UIPasteboard.general.string = pmoshSelectedText()
+            pmoshDismissEditMenu()
+            return
+        }
         UIPasteboard.general.string = selection.getSelectedText()
         selection.selectNone()
         disableSelectionPanGesture()
     }
         
     @objc open override func selectAll(_ sender: Any?) {
+        if pmoshNativeSelection {
+            // pmosh 11/04/2026: through the last character, not the blank rows under it, and the
+            // menu again for the Copy that comes next, as in iOS text.
+            let lines = terminal.displayBuffer.lines.count
+            var last = lines - 1
+            while last > 0 && pmoshTextEnd(row: last) == 0 { last -= 1 }
+            let end = Position(col: pmoshTextEnd(row: last), row: max(0, last))
+            guard end != Position(col: 0, row: 0) else { return }
+            selection.pmoshSetRange(start: Position(col: 0, row: 0), end: end)
+            updateSelectionHandles()
+            // After the menu that offered Select All has finished going away.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                guard let self, self.selection.active else { return }
+                self.pmoshPresentEditMenu(avoiding: self.pmoshMenuTarget())
+            }
+            return
+        }
         selection.selectAll()
         enableSelectionPanGesture()
     }
@@ -825,9 +863,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     ///  to auto-select a word
     func showContextMenu (forRegion: CGRect, pos: Position) {
         var items: [UIMenuItem] = []
-        
+
         lastLongSelect = pos
         lastLongSelectRegion = forRegion
+        if pmoshNativeSelection {
+            pmoshPresentEditMenu(avoiding: selection.active ? pmoshMenuTarget() : forRegion)
+            return
+        }
 
         //GAR: Declutter context menu
         //items.append (UIMenuItem(title: "Reset", action: #selector(resetCmd)))
@@ -853,11 +895,100 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                     
     func makeContextMenuRegionForSelection () -> CGRect {
         let width = selection.isMultiLine ? frame.width : CGFloat(selection.end.col-selection.start.col)*cellDimension.width
-        
+
         return CGRect (x: CGFloat (selection.start.col)*cellDimension.width,
                        y: CGFloat (selection.start.row)*cellDimension.height,
                        width: width,
                        height: CGFloat (selection.end.row-selection.start.row+1)*cellDimension.height)
+    }
+
+    // MARK: pmosh (11/04/2026): the edit menu
+    //
+    // UIEditMenuInteraction, the menu iOS text has used since iOS 16, in place of UIMenuController
+    // (deprecated since iOS 16), with the native selection. It stays off the selection and its
+    // handles (pmoshMenuTarget): the old menu stood on the lines under the selected word. It
+    // offers the system's own Copy, Paste and Select All, in the system's words.
+
+    private var pmoshEditMenuInteraction: AnyObject?
+    /// Whether the edit menu is up (its delegate calls say so).
+    public fileprivate(set) var pmoshMenuVisible = false
+    /// What the menu being presented stays off, in content space.
+    fileprivate var pmoshMenuAvoid = CGRect.null
+    /// Whether the menu up is about a selection (Copy), not the Paste one a tap or a press on
+    /// blank cells brings up.
+    private var pmoshMenuForSelection = false
+
+    @available(iOS 16.0, *)
+    private var pmoshEditMenu: UIEditMenuInteraction {
+        if let menu = pmoshEditMenuInteraction as? UIEditMenuInteraction { return menu }
+        let menu = UIEditMenuInteraction(delegate: self)
+        addInteraction(menu)
+        pmoshEditMenuInteraction = menu
+        return menu
+    }
+
+    /// Shows the menu above `region` (content space), or below it when there is no room above.
+    func pmoshPresentEditMenu(avoiding region: CGRect) {
+        guard #available(iOS 16.0, *) else { return }
+        pmoshMenuAvoid = region
+        pmoshMenuForSelection = selection.active
+        let point = CGPoint(x: region.midX, y: region.minY)
+        pmoshEditMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+    }
+
+    func pmoshDismissEditMenu() {
+        guard #available(iOS 16.0, *), let menu = pmoshEditMenuInteraction as? UIEditMenuInteraction else { return }
+        menu.dismissMenu()
+    }
+
+    /// What the menu stays off: the selection's rows, as much of them as is on screen. UIKit puts
+    /// the menu above them, or below when there is no room, with the gap it leaves for its own
+    /// text's knobs: measured on the simulator (11/04), iOS's menu for a word in a UITextView
+    /// stands 17 pt under the line, just clear of the 16 pt knob, and this one now does too.
+    func pmoshMenuTarget() -> CGRect {
+        let (s, e) = pmoshOrderedSelection
+        let w = cellDimension.width
+        let h = cellDimension.height
+        let left = s.row == e.row ? CGFloat(s.col) * w : 0
+        let right = s.row == e.row ? CGFloat(e.col) * w : CGFloat(terminal.cols) * w
+        let rows = CGRect(x: left, y: CGFloat(s.row) * h, width: max(1, right - left),
+                          height: CGFloat(e.row - s.row + 1) * h)
+        let onScreen = rows.intersection(bounds)
+        return onScreen.isNull || onScreen.isEmpty ? CGRect(x: bounds.midX, y: bounds.minY, width: 1, height: 1) : onScreen
+    }
+
+    /// Whether `point` (content space) is on the selection: on a selected cell, or on a handle.
+    func pmoshIsOnSelection(_ point: CGPoint) -> Bool {
+        guard selection.active, selection.hasSelectionRange else { return false }
+        for case let handle? in [selectionStartHandleView, selectionEndHandleView]
+            where !handle.isHidden && handle.frame.contains(point) {
+            return true
+        }
+        let row = Int(floor(point.y / cellDimension.height))
+        let col = Int(floor(point.x / cellDimension.width))
+        guard let cols = selectedColumnsRange(row: row, cols: terminal.cols) else { return false }
+        return cols.contains(col)
+    }
+
+    /// pmosh 11/04/2026: ends the selection, as a tap elsewhere or a key does: no highlight, no
+    /// handles, no menu.
+    public func pmoshEndSelection() {
+        if pmoshMenuVisible { pmoshDismissEditMenu() }
+        guard selection.active else { return }
+        selection.selectNone()
+        disableSelectionPanGesture()
+    }
+
+    /// The selected text as it reads, each line's trailing blanks dropped.
+    func pmoshSelectedText() -> String {
+        selection.getSelectedText()
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                var t = line
+                while let last = t.last, last == " " { t = t.dropLast() }
+                return t
+            }
+            .joined(separator: "\n")
     }
     
     /// pmosh (11/01/2026, rob: "the three d press to select doesnt even work"): press and hold on
@@ -878,6 +1009,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             let ch = terminal.getCharacter (for: buffer.getChar (atBufferRelative: hit))
             if ch == " " || ch == Character (UnicodeScalar (0)) {
                 let tapLocation = gestureRecognizer.location(in: gestureRecognizer.view)
+                if pmoshNativeSelection { pmoshEndSelection() }
                 showContextMenu (forRegion: makeContextMenuRegionForTap (point: tapLocation), pos: hit)
                 return
             }
@@ -918,6 +1050,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// The word a long press selected, while that press is still down.
     var longPressWord: (start: Position, end: Position)?
 
+    /// The long press that selects a word (setupGestures); it waits out the handles' drags.
+    private var pmoshLongPress: UILongPressGestureRecognizer?
+
     /// The long press's finger at `point` (content space): the selection runs from the first
     /// word to the word under the finger, anchored on that word's far end so it stays selected
     /// either way, and the loupe follows the end that moves.
@@ -928,6 +1063,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let before = Position.compare(hit, word.start) == .before
         selection.pivot = before ? word.end : word.start
         selection.pivotExtend(bufferPosition: hit)
+        if pmoshNativeSelection {
+            // Over the blank cells after a row's text, the end stays at the text (11/04/2026).
+            let (s, e) = pmoshOrderedSelection
+            let snapped = (Position(col: min(s.col, pmoshTextEnd(row: s.row)), row: s.row),
+                           Position(col: min(e.col, pmoshTextEnd(row: e.row)), row: e.row))
+            if snapped.0 != snapped.1, snapped.0 != s || snapped.1 != e {
+                selection.pmoshSetRange(start: snapped.0, end: snapped.1)
+            }
+            updateSelectionHandles()
+        }
         requestDisplay()
         moveLoupe(to: point, endpoint: before ? selection.start : selection.end, trailingEdge: !before)
     }
@@ -950,9 +1095,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     /// `endpoint`: the selection end that is moving; `trailingEdge`: its caret sits after the
     /// cell (the end) rather than before it (the start). Off screen, the loupe follows the finger.
+    /// With the native selection (11/04/2026) both ends are boundaries already, the end an
+    /// exclusive one, so the caret is at the end's own column either way.
     private func moveLoupe(to point: CGPoint, endpoint: Position, trailingEdge: Bool) {
         guard #available(iOS 17.0, *), let session = loupe as? UITextLoupeSession else { return }
-        let x = CGFloat(endpoint.col + (trailingEdge ? 1 : 0)) * cellDimension.width
+        let x = CGFloat(endpoint.col + (trailingEdge && !pmoshNativeSelection ? 1 : 0)) * cellDimension.width
         let caret = CGRect(x: x - 1, y: CGFloat(endpoint.row) * cellDimension.height,
                            width: 2, height: cellDimension.height)
         if bounds.intersects(caret) {
@@ -1136,6 +1283,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 if terminal.mouseMode.sendButtonRelease() {
                     sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: true)
                 }
+            } else if pmoshNativeSelection {
+                pmoshTap(gestureRecognizer)
             } else {
                 if selection.active {
                     selection.selectNone()
@@ -1159,6 +1308,35 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
     
+    /// A tap with the native selection (pmosh 11/04/2026), as in iOS text: on the selection (or a
+    /// handle) it shows or hides the menu; anywhere else it ends the selection, or puts an open
+    /// menu away. With nothing selected, a tap next to the cursor offers Paste, as before.
+    private func pmoshTap(_ gestureRecognizer: UIGestureRecognizer) {
+        let point = gestureRecognizer.location(in: self)
+        if selection.active {
+            if pmoshIsOnSelection(point) {
+                if pmoshMenuVisible {
+                    pmoshDismissEditMenu()
+                } else {
+                    pmoshPresentEditMenu(avoiding: pmoshMenuTarget())
+                }
+            } else {
+                pmoshEndSelection()
+            }
+            return
+        }
+        if pmoshMenuVisible {
+            pmoshDismissEditMenu()
+            return
+        }
+        let tapLoc = calculateTapHit(gesture: gestureRecognizer).grid
+        let displayBuffer = terminal.displayBuffer
+        let cursorRow = displayBuffer.y + displayBuffer.yDisp
+        if abs (tapLoc.col-displayBuffer.x) < 4 && abs (tapLoc.row - cursorRow) < 2 {
+            showContextMenu (forRegion: makeContextMenuRegionForTap (point: point), pos: tapLoc)
+        }
+    }
+
     @objc func doubleTap (_ gestureRecognizer: UITapGestureRecognizer)
     {
         guard gestureRecognizer.view != nil else { return }
@@ -1419,6 +1597,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         guard panSelectionGesture == nil else {
             return
         }
+        // pmosh 11/04/2026: with the native selection a drag that starts off the handles scrolls,
+        // as in iOS text; only the handles (and the press that made the selection, still down)
+        // move its ends. Until then every drag anywhere dragged the selection and nothing scrolled.
+        if pmoshNativeSelection {
+            return
+        }
         let gesture = UIPanGestureRecognizer (target: self, action: #selector(panSelectionHandler))
         // If the user touches a handle knob, let the knob's own pan take priority;
         // the selection-body pan only activates when the knob pans have failed.
@@ -1455,7 +1639,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // pmosh (11/01/2026): UIKit's own 0.5 s, the hold every other app selects text at.
         longPress.minimumPressDuration = 0.5
         addGestureRecognizer(longPress)
-        
+        pmoshLongPress = longPress
+
         let singleTap = UITapGestureRecognizer (target: self, action: #selector(singleTap(_:)))
         addGestureRecognizer(singleTap)
         
@@ -1713,112 +1898,94 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     var _selectionHandleColor: UIColor = UIColor.systemBlue
-    /// The color used to render the selection handles
+    /// The color used to render the selection handles. With `pmoshNativeSelection` the handles
+    /// take the view's tint, as iOS's own do, and this is not used.
     public var selectionHandleColor: UIColor {
         get {
             return _selectionHandleColor
         }
         set {
             _selectionHandleColor = newValue
-            selectionStartHandleView?.backgroundColor = newValue
-            selectionEndHandleView?.backgroundColor = newValue
+            updateSelectionHandles()
         }
     }
 
-    // MARK: - Selection handles (draggable knobs at selection start/end)
+    // MARK: - Selection handles (draggable at selection start/end)
 
-    /// Diameter of each circular selection-handle knob (points).
-    private let selectionHandleDiameter: CGFloat = 14
+    /// The handle on the selection's START.
+    private var selectionStartHandleView: PmoshSelectionHandle?
+    /// The handle on the selection's END.
+    private var selectionEndHandleView: PmoshSelectionHandle?
 
-    /// The knob at the selection START position (top-left of the highlighted region).
-    private var selectionStartHandleView: UIView?
-    /// The knob at the selection END position (bottom-right of the highlighted region).
-    private var selectionEndHandleView: UIView?
+    /// The two handles' drags (pmosh 11/04/2026). The scroll view's pan and the long press wait
+    /// for them to fail, and the app's own pans on this view can do the same: a drag that starts
+    /// on a handle moves that handle and nothing else, and holding a handle selects no word.
+    public private(set) var pmoshSelectionHandleGestures: [UIGestureRecognizer] = []
 
     /// Which handle the user is currently dragging (nil when neither is active).
     private enum DraggedHandle { case start, end }
     private var draggedHandle: DraggedHandle?
 
-    /// Creates the two handle knobs on first use and adds them to the view hierarchy.
+    /// Creates the two handles on first use and adds them to the view hierarchy.
     private func ensureHandleViews() {
         guard selectionStartHandleView == nil else { return }
-
-        func makeKnob() -> UIView {
-            let d = selectionHandleDiameter
-            let v = SelectionKnob(frame: CGRect(x: 0, y: 0, width: d, height: d))
-            v.backgroundColor = _selectionHandleColor
-            v.layer.cornerRadius = d / 2
-            v.layer.shadowColor = UIColor.black.cgColor
-            v.layer.shadowOpacity = 0.25
-            v.layer.shadowOffset = CGSize(width: 0, height: 1)
-            v.layer.shadowRadius = 2
-            v.isHidden = true
-            addSubview(v)
-            return v
+        let startHandle = PmoshSelectionHandle(isStart: true)
+        let endHandle = PmoshSelectionHandle(isStart: false)
+        startHandle.other = endHandle
+        endHandle.other = startHandle
+        for (handle, action) in [(startHandle, #selector(panStartHandle(_:))), (endHandle, #selector(panEndHandle(_:)))] {
+            let pan = UIPanGestureRecognizer(target: self, action: action)
+            pan.minimumNumberOfTouches = 1
+            pan.maximumNumberOfTouches = 1
+            handle.addGestureRecognizer(pan)
+            addSubview(handle)
+            panGestureRecognizer.require(toFail: pan)
+            pmoshLongPress?.require(toFail: pan)
+            pmoshSelectionHandleGestures.append(pan)
         }
-
-        let startKnob = makeKnob()
-        let startPan = UIPanGestureRecognizer(target: self, action: #selector(panStartHandle(_:)))
-        startPan.minimumNumberOfTouches = 1
-        startPan.maximumNumberOfTouches = 1
-        startKnob.addGestureRecognizer(startPan)
-        selectionStartHandleView = startKnob
-
-        let endKnob = makeKnob()
-        let endPan = UIPanGestureRecognizer(target: self, action: #selector(panEndHandle(_:)))
-        endPan.minimumNumberOfTouches = 1
-        endPan.maximumNumberOfTouches = 1
-        endKnob.addGestureRecognizer(endPan)
-        selectionEndHandleView = endKnob
+        selectionStartHandleView = startHandle
+        selectionEndHandleView = endHandle
     }
 
-    /// Converts a buffer-relative Position to a CGPoint in the scroll-view's content space.
-    /// Buffer row N lives at Y = N * cellDimension.height (yDisp is already encoded in the row).
-    private func contentPoint(for pos: Position) -> CGPoint {
-        return CGPoint(
-            x: CGFloat(pos.col) * cellDimension.width,
-            y: CGFloat(pos.row) * cellDimension.height
-        )
+    /// The selection's two ends in buffer order.
+    private var pmoshOrderedSelection: (start: Position, end: Position) {
+        Position.compare(selection.start, selection.end) == .after
+            ? (selection.end, selection.start) : (selection.start, selection.end)
     }
 
-    /// Repositions and shows/hides the two handle knobs to match the current selection.
+    /// Repositions and shows/hides the two handles to match the current selection.
     /// Safe to call at any time; no-ops when there is no active selection.
     func updateSelectionHandles() {
         ensureHandleViews()
-        guard let startKnob = selectionStartHandleView,
-              let endKnob = selectionEndHandleView else { return }
+        guard let startHandle = selectionStartHandleView,
+              let endHandle = selectionEndHandleView else { return }
 
         guard let sel = selection, sel.active, sel.hasSelectionRange else {
-            startKnob.isHidden = true
-            endKnob.isHidden = true
+            startHandle.isHidden = true
+            endHandle.isHidden = true
             return
         }
 
-        let d = selectionHandleDiameter
-        let startPt = contentPoint(for: sel.start)
-        let endPt   = contentPoint(for: sel.end)
-
-        // Start handle: centred on the top-left corner of the first selected cell,
-        // nudged left so the knob "hangs off" the left edge.
-        startKnob.frame = CGRect(
-            x: startPt.x - d / 2,
-            y: startPt.y - d / 2,
-            width: d, height: d
-        )
-
-        // End handle: centred on the bottom-right corner of the last selected cell.
-        endKnob.frame = CGRect(
-            x: endPt.x + cellDimension.width - d / 2,
-            y: endPt.y + cellDimension.height - d / 2,
-            width: d, height: d
-        )
-
-        startKnob.isHidden = false
-        endKnob.isHidden   = false
+        let (s, e) = pmoshOrderedSelection
+        let w = cellDimension.width
+        let h = cellDimension.height
+        let color: UIColor = pmoshNativeSelection ? tintColor : _selectionHandleColor
+        startHandle.color = color
+        endHandle.color = color
+        // pmosh 11/04/2026: each bar on the selection's own edge. The start is the first selected
+        // cell; the end is exclusive, the edge after the last selected cell (the 14 pt dot of
+        // before sat a cell past it, on the corner below).
+        startHandle.place(x: CGFloat(s.col) * w, top: CGFloat(s.row) * h, height: h, visible: bounds)
+        endHandle.place(x: CGFloat(e.col) * w, top: CGFloat(e.row) * h, height: h, visible: bounds)
+        startHandle.isHidden = false
+        endHandle.isHidden = false
 
         // Keep handles in front of content (they may have been behind after a Metal redraw).
-        bringSubviewToFront(startKnob)
-        bringSubviewToFront(endKnob)
+        // Only when they are not: this runs on every frame of a scroll with a selection shown.
+        if subviews.last !== endHandle || subviews.dropLast().last !== startHandle {
+            bringSubviewToFront(startHandle)
+            bringSubviewToFront(endHandle)
+        }
     }
 
     /// Converts a touch location in the knob's parent (self) coordinate space to a
@@ -1829,21 +1996,33 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         return Position(col: col, row: row)
     }
 
+    /// pmosh 11/04/2026: the selection boundary nearest `p` (content space), between two
+    /// characters the way an iOS caret lands, and never past the row's last character.
+    private func pmoshBoundary(at p: CGPoint) -> Position {
+        let lines = terminal.displayBuffer.lines.count
+        let row = max(0, min(Int(floor(p.y / cellDimension.height)), lines - 1))
+        let col = max(0, min(Int((p.x / cellDimension.width).rounded()), terminal.cols))
+        return Position(col: min(col, pmoshTextEnd(row: row)), row: row)
+    }
+
     /// pmosh (11/01/2026): a handle drag moves its end WITH the finger from where it took hold,
     /// instead of jumping the end to the cell under the finger (with the 44 pt grab, that jump
-    /// was up to two cells), plus the loupe and the edge auto-scroll. `anchor`: the middle of the
-    /// end's cell; `touch`: the touch-down point (the pan reports after its start-up slop).
+    /// was up to two cells), plus the loupe and the edge auto-scroll. `anchor`: where the end
+    /// sits (11/04: its edge, with the native selection; the middle of its cell before);
+    /// `touch`: the touch-down point (the pan reports after its start-up slop).
     private var handleGrab: (anchor: CGPoint, touch: CGPoint, which: DraggedHandle)?
 
     private func dragHandle(_ gesture: UIPanGestureRecognizer, _ which: DraggedHandle) {
         switch gesture.state {
         case .began:
             draggedHandle = which
+            if pmoshNativeSelection { pmoshDismissEditMenu() }
+            let (s, e) = pmoshOrderedSelection
             // The other end is the pivot, so this one moves freely.
-            selection.pivot = which == .start ? selection.end : selection.start
+            selection.pivot = which == .start ? e : s
             stopSelectionTimer()
-            let end = which == .start ? selection.start : selection.end
-            let anchor = CGPoint(x: (CGFloat(end.col) + 0.5) * cellDimension.width,
+            let end = which == .start ? s : e
+            let anchor = CGPoint(x: (CGFloat(end.col) + (pmoshNativeSelection ? 0 : 0.5)) * cellDimension.width,
                                  y: (CGFloat(end.row) + 0.5) * cellDimension.height)
             let loc = gesture.location(in: self)
             let t = gesture.translation(in: self)
@@ -1876,6 +2055,20 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     private func moveHandle(to loc: CGPoint, grab g: (anchor: CGPoint, touch: CGPoint, which: DraggedHandle)) {
         let target = CGPoint(x: g.anchor.x + loc.x - g.touch.x, y: g.anchor.y + loc.y - g.touch.y)
+        if pmoshNativeSelection {
+            // Character by character to the boundary nearest the finger, the way iOS text moves a
+            // handle, never past a row's last character, and never down to nothing: the handle
+            // stops a character short of the other end.
+            guard let pivot = selection.pivot else { return }
+            let b = pmoshBoundary(at: target)
+            guard b != pivot else { return }
+            let after = Position.compare(b, pivot) == .after
+            selection.pmoshSetRange(start: after ? pivot : b, end: after ? b : pivot)
+            updateSelectionHandles()
+            requestDisplay()
+            moveLoupe(to: loc, endpoint: b, trailingEdge: after)
+            return
+        }
         selection.pivotExtend(bufferPosition: bufferPosition(from: target))
         updateSelectionHandles()
         requestDisplay()
@@ -1923,6 +2116,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// for callers that don't have a UIResponder hook into the menu
     /// system (where `selectNone` would otherwise come from).
     public func clearSelection() {
+        if pmoshNativeSelection {
+            pmoshEndSelection()
+            return
+        }
         selection?.selectNone()
     }
 
@@ -2074,6 +2271,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         pmoshTrimmedBuffer = displayBuffer
         if rowsTrimmed > 0, contentOffset.y < previousBottomY - 1 {
             contentOffset = CGPoint (x: 0, y: max(0, contentOffset.y - CGFloat(rowsTrimmed) * cellDimension.height))
+        }
+        // pmosh 11/04/2026: the selection moves up with its text through the trims too, or it
+        // would slide a row down the text per line of output once the scrollback is full.
+        if rowsTrimmed > 0 {
+            selection.pmoshShift(rows: rowsTrimmed)
         }
         // pmosh #559 patch: only snap the viewport to the bottom when the user is NOT
         // scrolled up into history. Without this guard every new output line yanks the
@@ -2347,6 +2549,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 requestMetalDisplay()
             }
 #endif
+            // pmosh 11/04/2026: a finger moving the text puts the edit menu away, as iOS text does
+            // while it scrolls, and the handles keep their knobs on screen.
+            if pmoshNativeSelection, contentOffset != oldValue, selection?.active == true {
+                if isDragging || isDecelerating { pmoshDismissEditMenu() }
+                updateSelectionHandles()
+            }
         }
     }
 
@@ -2981,6 +3189,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     func ensureCaretIsVisible ()
     {
+        // pmosh 11/04/2026: every key, paste and hardware key from this view comes through here
+        // (send(data:)), and only those; the terminal's own answers to the host do not. A key
+        // ends the native selection, as typing replaces one in iOS text, and the app hears of it.
+        if pmoshNativeSelection, selection.active {
+            pmoshEndSelection()
+        }
+        pmoshOnUserInput?()
         guard !terminal.synchronizedOutputActive else { return }
         // Typing means "take me back to now" — clear BOTH flags, or the parked-resync
         // branch in updateScroller() fights this jump on the very next repaint.
@@ -3488,7 +3703,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 #endif
 
             if !self.selection.active {
-                UIMenuController.shared.hideMenu()
+                if self.pmoshNativeSelection {
+                    // The menu that was about the selection goes with it; a Paste menu stays.
+                    if self.pmoshMenuForSelection {
+                        self.pmoshDismissEditMenu()
+                    }
+                } else {
+                    UIMenuController.shared.hideMenu()
+                }
                 self.selection.selectNone()
                 self.disableSelectionPanGesture()
             }
@@ -3587,6 +3809,58 @@ extension TerminalViewDelegate {
     
     public func clipboardRead(source: TerminalView) -> Data? {
         return nil
+    }
+}
+
+/// The edit menu of the native selection (pmosh 11/04/2026), TerminalView.pmoshPresentEditMenu.
+@available(iOS 16.0, *)
+extension TerminalView: UIEditMenuInteractionDelegate {
+    public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                    targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        pmoshMenuAvoid.isNull ? CGRect(origin: configuration.sourcePoint, size: CGSize(width: 1, height: 1)) : pmoshMenuAvoid
+    }
+
+    /// The system's own Copy, Paste and Select All (whichever canPerformAction allows), in its
+    /// own words and order; nothing else it suggests. Look Up, Translate and Share act on what
+    /// UITextInput calls selected, and here that is the keyboard's input, not the terminal's text.
+    public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                    menuFor configuration: UIEditMenuConfiguration,
+                                    suggestedActions: [UIMenuElement]) -> UIMenu? {
+        let wanted: Set<Selector> = [#selector(copy(_:)), #selector(paste(_:)), #selector(selectAll(_:))]
+        func keep(_ elements: [UIMenuElement]) -> [UIMenuElement] {
+            elements.compactMap { element -> UIMenuElement? in
+                if let command = element as? UICommand {
+                    return wanted.contains(command.action) && canPerformAction(command.action, withSender: nil) ? command : nil
+                }
+                if let menu = element as? UIMenu {
+                    let children = keep(menu.children)
+                    return children.isEmpty ? nil : menu.replacingChildren(children)
+                }
+                return nil
+            }
+        }
+        var items = keep(suggestedActions)
+        if items.isEmpty {
+            // UIKit offered nothing usable: the same three, named here.
+            if selection.active {
+                items.append(UIAction(title: "Copy") { [weak self] _ in self?.copy(nil) })
+            }
+            items.append(UIAction(title: "Paste") { [weak self] _ in self?.paste(nil) })
+            items.append(UIAction(title: "Select All") { [weak self] _ in self?.selectAll(nil) })
+        }
+        return UIMenu(children: items)
+    }
+
+    public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                    willPresentMenuFor configuration: UIEditMenuConfiguration,
+                                    animator: any UIEditMenuInteractionAnimating) {
+        pmoshMenuVisible = true
+    }
+
+    public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                    willDismissMenuFor configuration: UIEditMenuConfiguration,
+                                    animator: any UIEditMenuInteractionAnimating) {
+        pmoshMenuVisible = false
     }
 }
 
@@ -3823,11 +4097,67 @@ extension TerminalView: UIAccessibilityReadingContent {
 
 #endif
 
-/// A selection handle: drawn 14 pt, grabbed anywhere within 22 pt of its centre, the 44 pt target
-/// iOS's own handles have (pmosh 11/01/2026: a 14 pt knob was nearly impossible to catch).
-private final class SelectionKnob: UIView {
-    static let reach: CGFloat = 22
+#if os(iOS) || os(visionOS)
+/// A selection handle as iOS draws its own (pmosh 11/04/2026, rob: "the select tool is terrible
+/// uve integrate what apple give su terribly into this app"): a bar the height of a row on the
+/// selection's edge, in the tint color, with a round knob on top of the start's bar and under the
+/// end's. Until 11/04 it was a 14 pt dot centred on the corner of the edge cell, over the
+/// characters around it, and the end's sat a cell past the selection. The view is the 44 pt
+/// target around the bar; of two handles whose targets overlap (a short selection), the nearer
+/// one takes the touch.
+final class PmoshSelectionHandle: UIView {
+    let isStart: Bool
+    weak var other: PmoshSelectionHandle?
+    private let shape = CAShapeLayer()
+    /// iOS 26's own, measured on the simulator (11/04): a read-only UITextView in this font and
+    /// size draws a 2 pt bar and a 16 pt knob, the same knob as at 17 pt text.
+    static let barWidth: CGFloat = 2
+    static let knobDiameter: CGFloat = 16
+    static let target: CGFloat = 44
+    /// The middle of the bar in the handle's own coordinates: what a touch is measured from.
+    private var barMid = CGPoint.zero
+
+    init(isStart: Bool) {
+        self.isStart = isStart
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        isOpaque = false
+        isHidden = true
+        layer.addSublayer(shape)
+        accessibilityIdentifier = isStart ? "selection.start" : "selection.end"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    var color: UIColor = .systemBlue
+
+    /// The bar at `x` from `top` down `height`, in the superview's coordinates, its knob kept
+    /// inside `visible` (the part of the superview on screen).
+    func place(x: CGFloat, top: CGFloat, height: CGFloat, visible: CGRect) {
+        let knob = Self.knobDiameter
+        let w = Self.target
+        let h = max(Self.target, height + 2 * knob + 4)
+        let f = CGRect(x: x - w / 2, y: top + height / 2 - h / 2, width: w, height: h)
+        if frame != f { frame = f }
+        let bar = CGRect(x: (w - Self.barWidth) / 2, y: top - f.minY, width: Self.barWidth, height: height)
+        var knobY = isStart ? bar.minY - knob / 2 : bar.maxY + knob / 2
+        knobY = min(max(knobY, visible.minY - f.minY + knob / 2), visible.maxY - f.minY - knob / 2)
+        let path = UIBezierPath(rect: bar)
+        path.append(UIBezierPath(ovalIn: CGRect(x: (w - knob) / 2, y: knobY - knob / 2, width: knob, height: knob)))
+        barMid = CGPoint(x: bar.midX, y: bar.midY)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shape.frame = bounds
+        shape.fillColor = color.cgColor
+        shape.path = path.cgPath
+        CATransaction.commit()
+    }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        hypot(point.x - bounds.midX, point.y - bounds.midY) <= Self.reach
+        guard bounds.contains(point) else { return false }
+        guard let other, !other.isHidden else { return true }
+        let theirs = other.convert(other.barMid, to: self)
+        return hypot(point.x - barMid.x, point.y - barMid.y) <= hypot(point.x - theirs.x, point.y - theirs.y)
     }
 }
+#endif
