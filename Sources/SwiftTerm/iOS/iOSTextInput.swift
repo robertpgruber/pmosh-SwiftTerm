@@ -278,14 +278,18 @@ extension TerminalView: UITextInput {
         endTextInputEdit()
     }
 
+    func restoreTextInputFiller() {
+        pendingAutoPeriodDeleteWasSpace = false
+        textInputStorage = TerminalView.textInputFiller
+        _selectedTextRange = TextRange(from: TextPosition(offset: TerminalView.textInputFillerLength), to: TextPosition(offset: TerminalView.textInputFillerLength))
+        _markedTextRange = nil
+    }
+
     func resetInputBuffer (_ loc: String = #function)
     {
         uitiLog("resetInputBuffer() from \(loc) \(textInputStateDescription())")
         beginTextInputEdit()
-        pendingAutoPeriodDeleteWasSpace = false
-        textInputStorage = ""
-        _selectedTextRange = TextRange (from: TextPosition(offset: 0), to: TextPosition(offset: 0))
-        _markedTextRange = nil
+        restoreTextInputFiller()
         endTextInputEdit()
     }
     
@@ -311,7 +315,7 @@ extension TerminalView: UITextInput {
     public var beginningOfDocument: UITextPosition {
         return TextPosition(offset: 0)
     }
-    
+
     public var endOfDocument: UITextPosition {
         return TextPosition(offset: textInputStorage.textInputUTF16Count)
     }

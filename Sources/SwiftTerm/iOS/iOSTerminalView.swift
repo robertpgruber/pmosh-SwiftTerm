@@ -487,8 +487,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // UITextInput support starts
     public lazy var tokenizer: UITextInputTokenizer = UITextInputStringTokenizer (textInput: self) // TerminalInputTokenizer()
     
-    // We use this as temporary storage for UITextInput, which we send to the terminal on demand
-    var textInputStorage: String = ""
+    // We use this as temporary storage for UITextInput, which we send to the terminal on demand.
+    // One filler space stands for the remote text the shadow cannot see. Without it UIKit parks
+    // the caret at the start of an empty document and a held Delete stops after one character.
+    static var textInputFiller: String {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-deleteShadowHasText") { return "" }
+        #endif
+        return " "
+    }
+    static var textInputFillerLength: Int { textInputFiller.isEmpty ? 0 : 1 }
+    var textInputStorage: String = TerminalView.textInputFiller
     var pendingAutoPeriodDeleteWasSpace: Bool = false
 
     // This tracks the marked text, part of the UITextInput protocol, which is used to flag temporary data entry, that might
@@ -499,7 +508,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     public weak var inputDelegate: UITextInputDelegate?
 
     // This tracks the selection in the textInputStorage, it is not the same as our global selection, it is temporary
-    var _selectedTextRange: TextRange = TextRange(from: TextPosition(offset: 0), to: TextPosition(offset: 0))
+    var _selectedTextRange: TextRange = TextRange(from: TextPosition(offset: TerminalView.textInputFillerLength), to: TextPosition(offset: TerminalView.textInputFillerLength))
 
     var _markedTextStyle: [NSAttributedString.Key: Any]?
 
@@ -2615,7 +2624,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         true
     }
     
-    public var hasText: Bool {
+    /// Whether the delete key has anything to act on.
+    ///
+    /// `open` rather than `public` because the answer belongs to the embedder: this
+    /// reports the input-session shadow, which is empty at an ordinary shell prompt,
+    /// while `deleteBackward()` — already `open` — sends a backspace in that same state.
+    /// A host that knows its far side always has something to delete can say so.
+    open var hasText: Bool {
         return !textInputStorage.isEmpty
     }
 
@@ -3219,10 +3234,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             if rangeStartIndex == 0 {
                 // This is the case when the user hits backspace, but there is no text in the
                 // text input buffer.  This happens for example when text has been pasted.
-                // In that scenario, we should just send the backspace character to the terminal
+                // In that scenario, we should just send the backspace character to the terminal.
+                // The remote document changed even though the local shadow was already empty:
+                // notify UIKit or the software keyboard stops a held Delete after this call.
+                beginTextInputEdit()
                 pendingAutoPeriodDeleteWasSpace = false
                 self.sendBackspaceKey()
                 uitiLog("deleteBackward() no text to delete, sending backspace")
+                restoreTextInputFiller()
+                endTextInputEdit()
                 return
             }
 
@@ -3232,6 +3252,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 pendingAutoPeriodDeleteWasSpace = false
                 self.sendBackspaceKey()
                 uitiLog("deleteBackward() no text to delete, sending backspace")
+                restoreTextInputFiller()
                 endTextInputEdit()
                 return
             }
@@ -3258,7 +3279,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
         
         _markedTextRange = nil
-        _selectedTextRange = TextRange(from: rangeStartPosition, to: rangeStartPosition)
+        if textInputStorage.isEmpty {
+            // The delete took the filler (the remote's stand-in). Replenish it so the next
+            // auto-repeat still has a character and a caret position to delete.
+            restoreTextInputFiller()
+        } else {
+            _selectedTextRange = TextRange(from: rangeStartPosition, to: rangeStartPosition)
+        }
 
         endTextInputEdit()
     }
