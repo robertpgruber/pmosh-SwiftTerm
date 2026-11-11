@@ -391,11 +391,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// rewind whenever the output rests (PmoshSeamWatch) and drops those rows: only after the
     /// rewind dialog's confirmation step was on screen and its message is back in the input, and
     /// only from a found row to the end of history.
+    ///
+    /// rob, 11/11: "yeah pmosh rewind is leaving leftovers". The same watch drops what a dialog
+    /// taller than the view pushed into history (his /model list over a turn still running):
+    /// Claude Code erases the view when such a dialog closes and draws the turn again from the
+    /// top, under the pushed copy. Only where the end of history repeats the top of the view.
     public var pmoshDropsRewoundHistory = false
 
     /// Told after a drop: rows dropped, where the seam was found ("rewind": the rewound
-    /// message's row; "repaint": where history starts repeating a full repaint), and the seam by
-    /// content (`pmoshCutAnchors`): tmux's own history still holds the rows.
+    /// message's row; "repaint": where history starts repeating a rewind's full repaint;
+    /// "redraw": where it repeats a repaint no rewind asked for), and the seam by content
+    /// (`pmoshCutAnchors`): tmux's own history still holds the rows.
     public var pmoshOnRewoundHistoryDropped: ((_ rows: Int, _ reason: String, _ at: Terminal.PmoshCutAnchors) -> Void)?
 
     private let pmoshSeamWatch = PmoshSeamWatch()

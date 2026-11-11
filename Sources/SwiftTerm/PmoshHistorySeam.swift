@@ -24,6 +24,18 @@ import Foundation
 // message is back in the input it names the seam: the rewound message's own row, or, after a
 // full repaint, where history starts repeating it (`pmoshRepaintSeam`). Only ever a found row to
 // the end of history goes.
+//
+// rob, 11/11: "yeah pmosh rewind is leaving leftovers". No rewind made those: a dialog taller
+// than the room under the conversation did (his /model list is 31 rows in a 34-row view). The
+// turn still running is not settled text yet, Claude Code redraws it with the dialog; the dialog
+// pushed its first rows — the message, and the dialog's own top rule — into history, and
+// closing it erased the view the same way (CUP home, EL 2 + CUD 1 per row, CUP home) and drew
+// the turn again from the top of the view. History kept the pushed copy right above it, in
+// tmux's as well. Measured 11/11 in 78x34 tmux panes on Spark's 2.1.260, a stand-in answering
+// for the model. `pmoshRedrawSeam` names that seam: where history repeats the view's first
+// rows and then stops, or goes on with the dialog's rule, or started at a row that was the
+// view's first one at a rest before the push. The watch asks it after every such erase that
+// neither a rewind nor a resize explains.
 
 extension Terminal {
     /// The run detector behind `pmoshViewportClears`; the parser calls it before every CSI.
@@ -150,6 +162,78 @@ extension Terminal {
             if c != 0 && c != 32 && c != 0x2500 && c != 0x2501 { return false }
         }
         return true
+    }
+
+    /// A row that is one box rule from edge to edge: the line Claude Code draws on top of a
+    /// dialog (and around its input, where that has rules).
+    static func pmoshIsRule(_ line: BufferLine) -> Bool {
+        var rules = 0
+        for i in 0..<line.count {
+            let c = line[i].code
+            if c == 0x2500 || c == 0x2501 {
+                rules += 1
+            } else if c != 0 && c != 32 {
+                return false
+            }
+        }
+        return rules >= max(8, line.count - 2)
+    }
+
+    /// After a full-view erase and repaint that no rewind explains: the first history row the
+    /// repaint made stale, or nil. Claude Code erases the whole view only when what it last drew
+    /// was taller than the view (a dialog over a turn still running, over a long list of models),
+    /// and then paints its screen's last rows from the top of the view. Whatever the tall drawing
+    /// pushed into history on its way up is drawn again there, so history repeats the view's
+    /// first rows — 2 or more, not all blank — and after the repeat
+    ///  - stops (the repeat is all that was pushed), or
+    ///  - goes on with what stood under them: a rule within its next rows (the dialog's top; a
+    ///    spinner row may sit above it), or
+    ///  - goes on with anything, when the repeat is 3 rows or more and starts at one of
+    ///    `quietTops`: a row that was the view's first one when the output rested before the
+    ///    push, so the view shows again what it showed then (what follows is a command's echo
+    ///    that Esc took back, rows the dialog itself pushed).
+    /// The latest such row is the seam. The first two are looked for in the last two views' worth
+    /// of history only: nothing taller gets drawn there. Rows are compared by their text only.
+    /// Main screen only.
+    public func pmoshRedrawSeam(quietTops: [Int] = []) -> Int? {
+        guard !isCurrentBufferAlternate else { return nil }
+        let b = buffer
+        let history = b.yBase
+        guard history > 0, history + b.rows <= b.lines.count else { return nil }
+        let head = b.lines[history]
+        let tops = Set(quietTops.filter { $0 >= 0 && $0 < history })
+        let near = max(0, history - (2 * b.rows + 8))
+        let lowest = min(near, tops.min() ?? near)
+        var p = history - 1
+        while p >= lowest {
+            if (p >= near || tops.contains(p)), Terminal.pmoshSameText(b.lines[p], head) {
+                var k = 1
+                while k < b.rows, p + k < history, Terminal.pmoshSameText(b.lines[p + k], b.lines[history + k]) {
+                    k += 1
+                }
+                var shown = 0
+                for r in 0..<k where !Terminal.pmoshIsBlankText(b.lines[history + r]) { shown += 1 }
+                if k >= 2, shown >= 1 {
+                    if p >= near {
+                        if p + k == history { return p }
+                        for q in (p + k)..<min(history, p + k + 4) where Terminal.pmoshIsRule(b.lines[q]) { return p }
+                    }
+                    if k >= 3, tops.contains(p) { return p }
+                }
+            }
+            p -= 1
+        }
+        return nil
+    }
+
+    /// The view's first rows as text, for telling a repaint that changed them from one that
+    /// drew the same screen again.
+    func pmoshViewHead(_ count: Int = 3) -> [String] {
+        let b = buffer
+        return (0..<min(count, b.rows)).map { r in
+            let i = b.yBase + r
+            return i < b.lines.count ? pmoshRowText(b.lines[i]) : ""
+        }
     }
 
     // MARK: Claude Code's rewind dialog
@@ -297,21 +381,48 @@ extension Terminal {
     /// (tmux's own, painted back by a later seed) can be cut the same way: the text of the rows
     /// that say something just before it and of the first ones in it, and how many rows come
     /// before the first of those inside it (blank rows, rules).
+    ///
+    /// `head` and `tail` say which rows exactly (11/11): `pmoshTextHash` of the cut's first rows
+    /// and, for a cut longer than that, of its last ones, blank rows and rules included. What a
+    /// dialog pushed into history is drawn again right under it, so the same message stands in
+    /// the copy and in the turn that follows; only the rows as a whole tell the two apart.
     public struct PmoshCutAnchors: Equatable {
         public var before: [String]
         public var first: [String]
         public var lead: Int
+        public var head: [UInt32]
+        public var tail: [UInt32]
 
-        public init(before: [String], first: [String], lead: Int) {
+        public init(before: [String], first: [String], lead: Int, head: [UInt32] = [], tail: [UInt32] = []) {
             self.before = before
             self.first = first
             self.lead = lead
+            self.head = head
+            self.tail = tail
         }
+    }
+
+    /// Rows hashed at each end of a cut for `PmoshCutAnchors.head` and `.tail`.
+    public static let pmoshCutHashedRows = 12
+
+    /// A row's text as one number (FNV-1a over its UTF-8), the same for a row of the buffer
+    /// (`pmoshRowText`) and for the line tmux captured of it, escapes and trailing spaces off.
+    public static func pmoshTextHash(_ text: String) -> UInt32 {
+        var h: UInt32 = 2166136261
+        for byte in text.utf8 {
+            h ^= UInt32(byte)
+            h = h &* 16777619
+        }
+        return h
     }
 
     /// The anchors of a cut from buffer row `row`, `count` rows each way.
     public func pmoshCutAnchors(at row: Int, count: Int = 3) -> PmoshCutAnchors {
         let b = buffer
+        let cut = max(0, b.yBase - row)
+        let hashed = min(cut, Terminal.pmoshCutHashedRows)
+        let head = (0..<hashed).map { Terminal.pmoshTextHash(pmoshRowText(b.lines[row + $0])) }
+        let tail = cut > hashed ? (0..<hashed).map { Terminal.pmoshTextHash(pmoshRowText(b.lines[b.yBase - hashed + $0])) } : []
         var before: [String] = []
         var i = row - 1
         while i >= 0, before.count < count {
@@ -328,7 +439,7 @@ extension Terminal {
             }
             i += 1
         }
-        return PmoshCutAnchors(before: before, first: first, lead: max(0, lead))
+        return PmoshCutAnchors(before: before, first: first, lead: max(0, lead), head: head, tail: tail)
     }
 
     /// Drops history from buffer row `from` to the end of history (the row above the view), so
@@ -355,9 +466,12 @@ extension Terminal {
 
 /// Watches a terminal at quiet moments (no output for a few tens of milliseconds) for Claude
 /// Code's rewind, and says where its history went stale, for the view to drop with
-/// `pmoshCutHistory`. It only ever cuts after the rewind dialog's confirmation step was on screen
-/// with a conversation restore picked, and the message it showed is back in the input: a repaint
-/// that follows a resize or a change above the view never cuts anything.
+/// `pmoshCutHistory`. For a rewind it only ever cuts after the dialog's confirmation step was on
+/// screen with a conversation restore picked, and the message it showed is back in the input.
+/// Any other full-view erase (11/11: the repaint that follows a dialog taller than the view)
+/// cuts only where history repeats the top of the view the way a pushed copy does
+/// (`pmoshRedrawSeam`). A repaint that follows a resize is never looked at, nor one that drew
+/// the same screen again (Ctrl-L).
 public final class PmoshSeamWatch {
     public init() {}
 
@@ -372,21 +486,85 @@ public final class PmoshSeamWatch {
     /// draws the restored input first and repaints the view after it; a link that stalls in
     /// between shows the cut before the repaint.
     private var followUp: (message: String, clears: Int, until: Date)?
+    /// `pmoshViewportClears` at the last look, and until when a full-view erase seen since then
+    /// may still be painting its rows (a link that delivers the repaint in pieces).
+    private var seenClears: Int?
+    private var redrawUntil: Date?
+    /// Where the view's first row stood at the output's rests, each place once, oldest first
+    /// (absolute: buffer row + `totalLinesTrimmed`). The last one is where it stands now.
+    private var quietTops: [Int] = []
+    static let quietTopsKept = 64
+    /// The grid at the last look, and when it last changed: the repaint that follows a resize
+    /// is the resize's own.
+    private var seenSize: (cols: Int, rows: Int)?
+    private var resizedAt: Date?
+    /// The view's first rows at the last look, and as they were at the look before the erase
+    /// now waited on.
+    private var seenHead: [String] = []
+    private var headBeforeErase: [String] = []
     /// How long after the dialog left the screen the restore is waited for.
     static let grace: TimeInterval = 3
 
     /// Which seam a cut was found at, for the log: the full repaint's (rewinding further back
-    /// than the view is tall), or the rewound message's own row.
+    /// than the view is tall), the rewound message's own row, or where a repaint no rewind
+    /// asked for drew the top of the view again (a dialog taller than the view closed).
     public enum Reason: String {
-        case repaint, rewind
+        case repaint, rewind, redraw
     }
 
     /// Call with the output quiet. Returns the buffer row to drop history from, or nil.
     public func settle(_ t: Terminal, now: Date = Date()) -> (from: Int, reason: Reason)? {
         guard !t.isCurrentBufferAlternate else {
             confirm = nil
+            seenClears = nil
+            redrawUntil = nil
+            quietTops = []
+            seenHead = []
             return nil
         }
+        defer { seenHead = t.pmoshViewHead() }
+        if let size = seenSize, size.cols != t.cols || size.rows != t.rows {
+            resizedAt = now
+            redrawUntil = nil
+        }
+        seenSize = (t.cols, t.rows)
+        // History that got shorter (a cut, a clear, a taller grid) took the rows after its new
+        // end with it.
+        let top = t.buffer.yBase + t.buffer.totalLinesTrimmed
+        quietTops.removeAll { $0 >= top }
+        quietTops.append(top)
+        if quietTops.count > PmoshSeamWatch.quietTopsKept { quietTops.removeFirst() }
+        if let seen = seenClears, seen != t.pmoshViewportClears {
+            if let r = resizedAt, now.timeIntervalSince(r) <= PmoshSeamWatch.grace {
+                redrawUntil = nil
+            } else {
+                redrawUntil = now.addingTimeInterval(PmoshSeamWatch.grace)
+                headBeforeErase = seenHead
+            }
+        }
+        seenClears = t.pmoshViewportClears
+        var rewinding = false
+        if let cut = settleRewind(t, now: now, rewinding: &rewinding) {
+            redrawUntil = nil
+            return cut
+        }
+        // A rewind on its way owns the erase that comes with it.
+        guard !rewinding, let until = redrawUntil else { return nil }
+        guard now <= until else {
+            redrawUntil = nil
+            return nil
+        }
+        // The same screen drawn again pushed nothing and repeats nothing.
+        guard t.pmoshViewHead() != headBeforeErase else { return nil }
+        let trimmed = t.buffer.totalLinesTrimmed
+        guard let p = t.pmoshRedrawSeam(quietTops: quietTops.dropLast().map { $0 - trimmed }) else { return nil }
+        redrawUntil = nil
+        return (p, .redraw)
+    }
+
+    /// The rewind's part of `settle`. `rewinding` comes back true while its dialog's
+    /// confirmation step is on screen or its restore is still waited for.
+    private func settleRewind(_ t: Terminal, now: Date, rewinding: inout Bool) -> (from: Int, reason: Reason)? {
         let b = t.buffer
         if let f = followUp {
             if now > f.until {
@@ -399,6 +577,7 @@ public final class PmoshSeamWatch {
         if var shown = t.pmoshRewindConfirm() {
             // A dialog caught half drawn or half erased says less than the whole one did: keep
             // what the whole one said.
+            rewinding = true
             if let c = confirm {
                 if shown.restoresConversation == nil { shown.restoresConversation = c.dialog.restoresConversation }
                 if c.dialog.message.hasPrefix(shown.message) {
@@ -424,7 +603,7 @@ public final class PmoshSeamWatch {
         goneAt = since
         let expired = now.timeIntervalSince(since) > PmoshSeamWatch.grace
         guard let draft = t.pmoshDraftRow(c.dialog.message) else {
-            if expired { confirm = nil }
+            if expired { confirm = nil } else { rewinding = true }
             return nil
         }
         // The restore is done: the message is back in the input.
@@ -442,6 +621,7 @@ public final class PmoshSeamWatch {
             if let p = t.pmoshRepaintSeam(frameTop: draft) {
                 if cut.map({ p < $0.from }) ?? true { cut = (p, .repaint) }
             } else if !expired {
+                rewinding = true
                 return nil
             }
         } else if cut != nil {
@@ -456,11 +636,17 @@ public final class PmoshSeamWatch {
     public func reset(_ t: Terminal) {
         confirm = nil
         goneAt = nil
+        redrawUntil = nil
     }
 
     /// Forget a repaint still waited for after a rewind cut too (the view switched buffers).
     public func forget(_ t: Terminal) {
         reset(t)
         followUp = nil
+        seenClears = nil
+        quietTops = []
+        seenHead = []
+        seenSize = nil
+        resizedAt = nil
     }
 }
